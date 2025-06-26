@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 import secrets
 from app.extensions import db, bcrypt
+from sqlalchemy import String, DateTime
 
 class UserStatus(Enum):
     ACTIVE    = "active"
@@ -20,6 +21,8 @@ class User(db.Model):
     last_name      = db.Column(db.String(50), nullable=False)
     status         = db.Column(db.Enum(UserStatus), default=UserStatus.PENDING, nullable=False)
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+    password_reset_token = db.Column(String(128), nullable=True)
+    password_reset_expires = db.Column(DateTime, nullable=True)
     
     # relationships
     roles          = db.relationship("Role", secondary="user_roles", backref="users")

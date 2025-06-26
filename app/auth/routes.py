@@ -1,4 +1,6 @@
-from flask import request, url_for
+import logging
+import os
+from flask import current_app, request, url_for
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity
 from marshmallow import ValidationError
@@ -126,7 +128,7 @@ class PasswordResetRequest(Resource):
     @auth_ns.expect(reset_req_model)
     @limiter.limit("3/hour")
     def post(self):
-        """Request a password-reset email."""
+        """Send password-reset link to email."""
         data = request.get_json()
         try:
             valid = PasswordResetRequestSchema().load(data)
@@ -135,29 +137,35 @@ class PasswordResetRequest(Resource):
 
         user = User.query.filter_by(email=valid["email"]).first()
         if user:
-            token = user.generate_reset_token()
-            # Assuming your Next.js reset page is at /reset-password
-            reset_url = url_for("reset-password", token=token, _external=True)
-            msg = Message(
-                subject="Moonlight Freight Password Reset",
-                recipients=[user.email]
-            )
-            msg.body = (
-                f"Hello {user.first_name},\n\n"
-                f"Please reset your password using the link below:\n\n"
-                f"{reset_url}\n\n"
-                f"If you did not request this, please ignore."
-            )
-            mail.send(msg)
+            try:
+                token = user.generate_reset_token()
+                # Use environment or fallback
+                frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+                reset_url = f"{frontend_url}/auth/reset-password?token={token}"
 
-        # Always 200 to prevent email enumeration
-        return {"msg": "If your email exists, you’ll receive a reset link shortly."}, 200
+                msg = Message(
+                    subject="Moonlight Freight Password Reset",
+                    recipients=[user.email],
+                    body=(
+                        f"Hello {user.first_name},\n\n"
+                        f"Reset your password using this link:\n\n"
+                        f"{reset_url}\n\n"
+                        f"This link expires in 1 hour. If you didn't request this, ignore it."
+                    )
+                )
+                mail.send(msg)
+                current_app.logger.info(f"Password reset email sent to {user.email}")
+            except Exception as e:
+                logging.exception("Failed to send reset email")
+                return {"msg": "Internal error while sending email."}, 500
+
+        return {"msg": "Reset link will be sent to your mail address."}, 200
 
 @auth_ns.route("/password-reset/confirm")
 class PasswordResetConfirm(Resource):
     @auth_ns.expect(reset_confirm_model)
     def post(self):
-        """Confirm reset token and set new password."""
+        """Verify token and reset password."""
         data = request.get_json()
         try:
             valid = PasswordResetConfirmSchema().load(data)
@@ -165,15 +173,15 @@ class PasswordResetConfirm(Resource):
             return {"msg": "Validation error", "errors": err.messages}, 400
 
         user = User.query.filter_by(password_reset_token=valid["token"]).first()
-        if (
-            not user or
-            not user.password_reset_expires or
-            user.password_reset_expires < datetime.utcnow()
-        ):
-            return {"msg": "Invalid or expired token"}, 400
+
+        if not user:
+            return {"msg": "Invalid token"}, 400
+
+        if not user.password_reset_expires or user.password_reset_expires < datetime.utcnow():
+            return {"msg": "Token has expired"}, 400
 
         user.set_password(valid["password"])
-        user.password_reset_token   = None
+        user.password_reset_token = None
         user.password_reset_expires = None
         db.session.commit()
 
