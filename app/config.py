@@ -18,15 +18,8 @@ class Config:
     MAIL_PASSWORD       = os.getenv("MAIL_PASSWORD")
     MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER")
 
-    # Construct the MySQL URI
-    MYSQL_HOST = os.getenv("MYSQL_HOST")
-    MYSQL_USER = os.getenv("MYSQL_USER")
-    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
-    MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
-    SQLALCHEMY_DATABASE_URI = (
-        f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}"
-        f"@{MYSQL_HOST}/{MYSQL_DATABASE}"
-    )
+    # Use SQLite for development
+    SQLALCHEMY_DATABASE_URI = "sqlite:///app.db"
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)

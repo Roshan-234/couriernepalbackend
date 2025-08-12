@@ -3,17 +3,16 @@ from .user import User
 from .role import Role, UserRole
 
 def register_models():
-    """Create all tables and seed default roles."""
-    db.create_all()
-
-    # seed default roles if they don't exist
-    for name, desc in [
-        ("super_admin", "Full access"),
-        ("admin",       "User & shipment management"),
-        ("manager",     "Operational access"),
-        ("staff",       "Limited internal access"),
-        ("customer",    "End-user")
-    ]:
-        if not Role.query.filter_by(name=name).first():
-            db.session.add(Role(name=name, description=desc))
-    db.session.commit()
+    """Import all models and register default roles after migrations."""
+    # Import all models to register them with SQLAlchemy
+    from .agent import AgentProfile
+    from .blog import BlogPost, BlogCategory, BlogTag, BlogComment
+    from .contact import ContactForm
+    from .faq import FAQ
+    from .notification import NotificationLog
+    from .parcel import Parcel
+    from .pricing import PricingRule
+    from .service import Service
+    from .shipment import Shipment
+    from .tracking_event import TrackingEvent
+    from .warehouse import Warehouse

@@ -5,6 +5,30 @@ from flask import jsonify
 from app.models.user import User
 from app.extensions import db
 
+def admin_required(fn):
+    @wraps(fn)
+    @jwt_required()
+    def decorated(*args, **kwargs):
+        uid = get_jwt_identity()
+        user = User.query.get(uid)
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+        if not user.is_admin:
+            return jsonify({"msg": "Admin privileges required"}), 403
+        return fn(*args, **kwargs)
+    return decorated
+
+def login_required(fn):
+    @wraps(fn)
+    @jwt_required()
+    def decorated(*args, **kwargs):
+        uid = get_jwt_identity()
+        user = User.query.get(uid)
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+        return fn(*args, **kwargs)
+    return decorated
+
 def validate_password_strength(password: str):
     errors = []
     if len(password) < 8:

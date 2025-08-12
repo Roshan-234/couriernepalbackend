@@ -1,11 +1,10 @@
 from flask import Flask
 from .config import config
-from .extensions import db, migrate, bcrypt, cors, limiter, jwt, api, mail
+from .extensions import db, migrate, bcrypt, cors, limiter, jwt, mail
 from .models import register_models
 from .routes.health import health_ns
-from .auth.routes import auth_ns
-from .users.routes import user_ns
-# later: import other namespaces (users, auth, etc.)
+from .routes.admin import bp as admin_bp
+from .swagger_setup import init_swagger
 
 def create_app(env='default'):
     app = Flask(__name__)
@@ -18,13 +17,15 @@ def create_app(env='default'):
     cors.init_app(app, resources={r"/api/*": {"origins": "*"}})
     limiter.init_app(app)
     jwt.init_app(app)
-    api.init_app(app)
     mail.init_app(app)
-    api.add_namespace(auth_ns, path="/api/auth")
-    api.add_namespace(user_ns, path="/api/users")
+
+    # Initialize Swagger documentation
+    init_swagger(app)
 
     # Register blueprints/namespaces
     app.register_blueprint(health_ns, url_prefix='/api')
+    app.register_blueprint(blog_bp, url_prefix='/api/blog')
+    app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
     with app.app_context():
         register_models()
