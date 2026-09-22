@@ -17,6 +17,11 @@ from app.warehouses.routes import warehouse_ns
 from app.faq.routes import faq_ns
 from app.contact.routes import contact_ns
 from app.agents.routes import agent_ns
+from app.tracking_providers.routes import tp_ns
+from app.audit.routes import audit_ns
+from app.sessions.routes import sessions_ns
+from app.packing_lists.routes import pl_ns
+from app.invoices.routes import inv_ns
 
 def init_swagger(app):
     """Initialize Swagger documentation."""
@@ -32,6 +37,11 @@ def init_swagger(app):
     api.add_namespace(faq_ns, path='/api/faq')
     api.add_namespace(contact_ns, path='/api/contact')
     api.add_namespace(agent_ns, path='/api/agents')
+    api.add_namespace(tp_ns, path='/api/tracking-providers')
+    api.add_namespace(audit_ns, path='/api/audit')
+    api.add_namespace(sessions_ns, path='/api/sessions')
+    api.add_namespace(pl_ns, path='/api/packing-lists')
+    api.add_namespace(inv_ns, path='/api/invoices')
 
     # Register all Swagger definitions
     register_swagger_definitions()

@@ -1,0 +1,27 @@
+# ── Secrets — NEVER commit ──────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ── Flask / app runtime ─────────────────────────────────────
+instance/
+*.db
+*.sqlite3
+storage/
+*.log
+qa_results.txt
+qa_server.log
+
+# ── OS ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

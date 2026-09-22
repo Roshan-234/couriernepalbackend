@@ -15,7 +15,8 @@ class BlogCategory(db.Model):
 
     def __init__(self, **kwargs):
         super(BlogCategory, self).__init__(**kwargs)
-        self.slug = slugify(self.name)
+        if not self.slug:
+            self.slug = slugify(self.name)
 
     def to_dict(self):
         """Convert the category to a dictionary representation suitable for API responses"""
@@ -56,7 +57,9 @@ class BlogPost(db.Model):
     
     def __init__(self, **kwargs):
         super(BlogPost, self).__init__(**kwargs)
-        self.slug = slugify(self.title)
+        # Only auto-generate slug if the route didn't already provide a unique one
+        if not self.slug:
+            self.slug = slugify(self.title)
         if not self.excerpt and self.content:
             self.excerpt = self.content[:200] + '...'
 
@@ -91,7 +94,8 @@ class BlogTag(db.Model):
     
     def __init__(self, **kwargs):
         super(BlogTag, self).__init__(**kwargs)
-        self.slug = slugify(self.name)
+        if not self.slug:
+            self.slug = slugify(self.name)
 
     def to_dict(self):
         return {

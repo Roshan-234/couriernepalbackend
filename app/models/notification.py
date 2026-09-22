@@ -10,4 +10,7 @@ class NotificationLog(db.Model):
     sent_at     = db.Column(db.DateTime, default=datetime.utcnow)
     status      = db.Column(db.String(50))                   # e.g. “SENT”, “FAILED”
 
-    user        = db.relationship('User', backref='notifications')
+    user        = db.relationship(
+        'User',
+        backref=db.backref('notifications', cascade='all, delete-orphan'),
+    )

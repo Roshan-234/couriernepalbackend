@@ -35,8 +35,17 @@ class WarehouseList(Resource):
     @jwt_required()
     def post(self):
         """Create a new warehouse"""
-        data = warehouse_ns.payload
-        warehouse = Warehouse(**data)
+        data = warehouse_ns.payload or {}
+        # Required business keys
+        for field in ("name", "code"):
+            if not data.get(field):
+                warehouse_ns.abort(400, f"'{field}' is required")
+        # Only accept known columns to avoid TypeErrors on unexpected keys
+        allowed = {c.name for c in Warehouse.__table__.columns} - {"id", "created_at"}
+        clean = {k: v for k, v in data.items() if k in allowed}
+        if Warehouse.query.filter_by(code=clean["code"]).first():
+            warehouse_ns.abort(409, "Warehouse code already exists")
+        warehouse = Warehouse(**clean)
         db.session.add(warehouse)
         db.session.commit()
         return warehouse, 201
@@ -58,9 +67,11 @@ class WarehouseItem(Resource):
     def put(self, id):
         """Update a warehouse"""
         warehouse = Warehouse.query.get_or_404(id)
-        data = warehouse_ns.payload
+        data = warehouse_ns.payload or {}
+        allowed = {c.name for c in Warehouse.__table__.columns} - {"id", "created_at"}
         for key, value in data.items():
-            setattr(warehouse, key, value)
+            if key in allowed:
+                setattr(warehouse, key, value)
         db.session.commit()
         return warehouse
 

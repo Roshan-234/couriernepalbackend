@@ -1,0 +1,66 @@
+name: Deploy backend to cPanel
+
+# Ships the Flask app to the cPanel Python App, installs deps in its virtualenv,
+# runs DB migrations, and restarts Passenger.
+#
+# Repo SECRETS (Settings → Secrets and variables → Actions):
+#   SSH_HOST       cPanel host (e.g. server.himalayanhost.com)
+#   SSH_USER       cPanel username
+#   SSH_PORT       SSH port (HimalayanHost is often NOT 22)
+#   SSH_PRIVATE_KEY  deploy key (public half authorized in cPanel → SSH Access)
+#   BACKEND_PATH   app root, e.g. /home/USER/couriernepalbackend
+#   VENV_ACTIVATE  the exact "source .../activate" line cPanel's Python App shows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${{ secrets.SSH_PORT }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy code
+        run: |
+          # Excluded paths (secrets, uploads, instance dir, server venv) are
+          # preserved on the server; --delete only prunes tracked app files.
+          rsync -az --delete \
+            --exclude='.env' \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
+            --exclude='instance/' \
+            --exclude='storage/' \
+            --exclude='tests/' \
+            --exclude='*.log' \
+            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
+            ./ \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.BACKEND_PATH }}/"
+
+      - name: Install deps, migrate, restart
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.SSH_PORT }}" \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" bash -s <<'EOF'
+          set -euo pipefail
+          ${{ secrets.VENV_ACTIVATE }}
+          cd "${{ secrets.BACKEND_PATH }}"
+          pip install -r requirements.txt
+          FLASK_APP=passenger_wsgi:application FLASK_ENV=production flask db upgrade
+          mkdir -p "${{ secrets.BACKEND_PATH }}/tmp"
+          touch "${{ secrets.BACKEND_PATH }}/tmp/restart.txt"
+          echo "backend migrated + restarted"
+          EOF

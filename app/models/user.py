@@ -26,6 +26,12 @@ class User(db.Model):
     
     # relationships
     roles          = db.relationship("Role", secondary="user_roles", backref="users")
+    agent_profile  = db.relationship("AgentProfile", back_populates="user", uselist=False)
+
+    @property
+    def is_admin(self):
+        """True if the user holds an administrative role."""
+        return any(r.name in ("super_admin", "admin") for r in self.roles)
 
     def set_password(self, password):
         self.password_hash = bcrypt.generate_password_hash(password).decode("utf-8")

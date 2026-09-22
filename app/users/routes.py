@@ -81,7 +81,7 @@ class UserDetail(Resource):
     @user_ns.marshal_with(user_out)
     @jwt_required()
     def get(self, id):
-        me = User.query.get(get_jwt_identity())
+        me = User.query.get(int(get_jwt_identity()))
         if me.id != id and not any(r.name in ("admin","super_admin") for r in me.roles):
             user_ns.abort(403, "Forbidden")
         return User.query.get_or_404(id)
@@ -116,5 +116,33 @@ class UserDetail(Resource):
     @require_roles("super_admin")
     def delete(self, id):
         u = User.query.get_or_404(id)
-        db.session.delete(u); db.session.commit()
+
+        # Prevent admins from deleting their own account
+        if u.id == int(get_jwt_identity()):
+            user_ns.abort(400, "You cannot delete your own account")
+
+        # Refuse to orphan/destroy business records. Sessions, notifications
+        # (cascade) and audit logs (nullable) are cleaned up automatically.
+        from app.models.shipment import Shipment
+        from app.models.invoice import Invoice
+        from app.models.packing_list import PackingList
+        blockers = []
+        if Shipment.query.filter_by(user_id=u.id).count():
+            blockers.append("shipments")
+        if Invoice.query.filter_by(created_by=u.id).count():
+            blockers.append("invoices")
+        if PackingList.query.filter_by(created_by=u.id).count():
+            blockers.append("packing lists")
+        if u.agent_profile is not None:
+            blockers.append("agent profile")
+        if blockers:
+            user_ns.abort(
+                409,
+                "Cannot delete user with existing "
+                + ", ".join(blockers)
+                + ". Deactivate the account instead.",
+            )
+
+        db.session.delete(u)
+        db.session.commit()
         return {"msg": "Deleted"}, 204

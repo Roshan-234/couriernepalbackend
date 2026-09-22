@@ -1,7 +1,9 @@
+from flask import request
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import jwt_required
 from app.models.pricing import PricingRule
 from app.extensions import db
+from app.auth.utils import require_roles
 
 pricing_ns = Namespace('pricing', description='Pricing operations')
 
@@ -30,6 +32,7 @@ price_calculation_model = pricing_ns.model('PriceCalculation', {
     'declared_value': fields.Float(description='Declared value for insurance')
 })
 
+
 @pricing_ns.route('/')
 class PricingList(Resource):
     @pricing_ns.doc('list_pricing_rules')
@@ -49,6 +52,7 @@ class PricingList(Resource):
         db.session.add(rule)
         db.session.commit()
         return rule, 201
+
 
 @pricing_ns.route('/<int:id>')
 @pricing_ns.response(404, 'Pricing rule not found')
@@ -83,6 +87,7 @@ class PricingItem(Resource):
         db.session.commit()
         return '', 204
 
+
 @pricing_ns.route('/calculate')
 class PricingCalculator(Resource):
     @pricing_ns.doc('calculate_price')
@@ -90,36 +95,37 @@ class PricingCalculator(Resource):
     def post(self):
         """Calculate shipping price"""
         data = pricing_ns.payload
-        rule = PricingRule.query.filter_by(
-            service_type=data['service_type'],
-            shipment_type=data['shipment_type'],
-            origin_country=data['origin_country'],
-            destination_country=data['destination_country'],
-            is_active=True
-        ).first_or_404()
-        
-        return rule.calculate_price(
-            data['weight'], 
-            data.get('declared_value', 0)
-        )
+        try:
+            rule = PricingRule.query.filter_by(
+                service_type=data['service_type'],
+                shipment_type=data['shipment_type'],
+                origin_country=data['origin_country'],
+                destination_country=data['destination_country'],
+                is_active=True
+            ).first_or_404()
+            
+            return rule.calculate_price(
+                data['weight'],
+                data.get('declared_value', 0)
+            )
         except ValueError as e:
             return {"message": str(e)}, 400
+
 
 @pricing_ns.route("/rules")
 class PricingRules(Resource):
     @jwt_required()
-    @require_roles(['Admin'])
+    @require_roles("super_admin", "admin")
     def get(self):
         """Get all pricing rules (Admin only)"""
         rules = PricingRule.query.filter_by(is_active=True).all()
         return {"rules": [rule.to_dict() for rule in rules]}
 
     @jwt_required()
-    @require_roles(['Admin'])
+    @require_roles("super_admin", "admin")
     def post(self):
         """Create a new pricing rule (Admin only)"""
         data = request.get_json()
-        
         rule = PricingRule(
             service_type=data['service_type'],
             shipment_type=data['shipment_type'],
@@ -132,37 +138,34 @@ class PricingRules(Resource):
             insurance_percentage=data.get('insurance_percentage', 0),
             tax_percentage=data.get('tax_percentage', 0)
         )
-        
         db.session.add(rule)
         db.session.commit()
-        
         return rule.to_dict(), 201
+
 
 @pricing_ns.route("/rules/<int:id>")
 class PricingRuleDetail(Resource):
     @jwt_required()
-    @require_roles(['Admin'])
+    @require_roles("super_admin", "admin")
     def get(self, id):
         """Get pricing rule details (Admin only)"""
         rule = PricingRule.query.get_or_404(id)
         return rule.to_dict()
 
     @jwt_required()
-    @require_roles(['Admin'])
+    @require_roles("super_admin", "admin")
     def put(self, id):
         """Update pricing rule (Admin only)"""
         rule = PricingRule.query.get_or_404(id)
         data = request.get_json()
-        
         for key, value in data.items():
             if hasattr(rule, key):
                 setattr(rule, key, value)
-                
         db.session.commit()
         return rule.to_dict()
 
     @jwt_required()
-    @require_roles(['Admin'])
+    @require_roles("super_admin", "admin")
     def delete(self, id):
         """Delete pricing rule (Admin only)"""
         rule = PricingRule.query.get_or_404(id)

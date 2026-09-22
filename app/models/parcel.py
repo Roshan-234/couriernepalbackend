@@ -12,4 +12,3 @@ class Parcel(db.Model):
 
     shipment      = db.relationship('Shipment', back_populates='parcels')
     warehouse     = db.relationship('Warehouse', back_populates='parcels')
-    events        = db.relationship('TrackingEvent', back_populates='parcel')

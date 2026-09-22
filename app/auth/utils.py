@@ -9,7 +9,7 @@ def admin_required(fn):
     @wraps(fn)
     @jwt_required()
     def decorated(*args, **kwargs):
-        uid = get_jwt_identity()
+        uid = int(get_jwt_identity())
         user = User.query.get(uid)
         if not user:
             return jsonify({"msg": "User not found"}), 404
@@ -22,7 +22,7 @@ def login_required(fn):
     @wraps(fn)
     @jwt_required()
     def decorated(*args, **kwargs):
-        uid = get_jwt_identity()
+        uid = int(get_jwt_identity())
         user = User.query.get(uid)
         if not user:
             return jsonify({"msg": "User not found"}), 404
@@ -48,7 +48,7 @@ def require_roles(*roles):
         @wraps(fn)
         @jwt_required()
         def decorated(*args, **kwargs):
-            uid = get_jwt_identity()
+            uid = int(get_jwt_identity())
             user = User.query.get(uid)
             if not user:
                 return {"msg": "User not found"}, 404

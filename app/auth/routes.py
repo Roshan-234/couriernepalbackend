@@ -1,8 +1,11 @@
 import logging
 import os
-from flask import current_app, request, url_for
+from flask import current_app, request, url_for, g, make_response
 from flask_restx import Namespace, Resource, fields
-from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import (
+    create_access_token, create_refresh_token, jwt_required, get_jwt_identity,
+    set_access_cookies, set_refresh_cookies, unset_jwt_cookies, decode_token,
+)
 from marshmallow import ValidationError
 from app.extensions import db, limiter, mail
 from app.models.user import User, UserStatus
@@ -48,6 +51,22 @@ token_model = auth_ns.model("TokenResponse", {
     }))
 })
 
+def _track_session(user_id, access_token):
+    """Persist a revocable UserSession row for a freshly issued access token."""
+    from app.models.user_session import UserSession
+    from datetime import timedelta
+    jti = decode_token(access_token)["jti"]
+    session = UserSession(
+        user_id=user_id,
+        jti=jti,
+        ip_address=request.remote_addr,
+        user_agent=(request.user_agent.string or "")[:500] if request.user_agent else "",
+        expires_at=datetime.utcnow() + timedelta(hours=1),
+    )
+    db.session.add(session)
+    db.session.commit()
+
+
 @auth_ns.route("/register")
 class Register(Resource):
     @auth_ns.expect(register_model)
@@ -92,7 +111,7 @@ class Register(Resource):
 @auth_ns.route("/login")
 class Login(Resource):
     @auth_ns.expect(login_model)
-    @auth_ns.marshal_with(token_model)
+    @auth_ns.doc(model=token_model)
     @limiter.limit("10/minute")
     def post(self):
         data = request.get_json()
@@ -103,23 +122,45 @@ class Login(Resource):
             auth_ns.abort(403, "Account not active")
 
         roles = [r.name for r in user.roles]
-        access  = create_access_token(identity=user.id, additional_claims={"roles": roles})
-        refresh = create_refresh_token(identity=user.id)
-        return {"access_token": access, "refresh_token": refresh, "user": user.to_dict()}
+        access  = create_access_token(identity=str(user.id), additional_claims={"roles": roles})
+        refresh = create_refresh_token(identity=str(user.id))
+
+        _track_session(user.id, access)
+
+        # Let the audit middleware capture this user's id (no JWT on the login request itself)
+        g.audit_user_id = user.id
+
+        # Tokens are returned in the body for API/test clients AND set as
+        # HttpOnly cookies for the browser (which ignores the body tokens).
+        resp = make_response(
+            {"access_token": access, "refresh_token": refresh, "user": user.to_dict()},
+            200,
+        )
+        set_access_cookies(resp, access)
+        set_refresh_cookies(resp, refresh)
+        return resp
 
 @auth_ns.route("/refresh")
 class Refresh(Resource):
     @jwt_required(refresh=True)
     def post(self):
         uid = get_jwt_identity()
-        token = create_access_token(identity=uid)
-        return {"access_token": token}
+        user = User.query.get(int(uid))
+        roles = [r.name for r in user.roles] if user else []
+        access = create_access_token(identity=str(uid), additional_claims={"roles": roles})
+
+        # New access token gets its own tracked, revocable session row.
+        _track_session(int(uid), access)
+
+        resp = make_response({"access_token": access}, 200)
+        set_access_cookies(resp, access)
+        return resp
 
 @auth_ns.route("/profile")
 class Profile(Resource):
     @jwt_required()
     def get(self):
-        uid = get_jwt_identity()
+        uid = int(get_jwt_identity())
         return User.query.get_or_404(uid).to_dict()
 
 
@@ -186,3 +227,21 @@ class PasswordResetConfirm(Resource):
         db.session.commit()
 
         return {"msg": "Your password has been reset successfully."}, 200
+
+
+@auth_ns.route("/logout")
+class Logout(Resource):
+    @auth_ns.doc(security="Bearer")
+    @jwt_required()
+    def post(self):
+        from flask_jwt_extended import get_jwt
+        from app.models.user_session import UserSession
+        jti = get_jwt().get("jti")
+        if jti:
+            sess = UserSession.query.filter_by(jti=jti).first()
+            if sess:
+                sess.is_revoked = True
+                db.session.commit()
+        resp = make_response({"msg": "Logged out successfully"}, 200)
+        unset_jwt_cookies(resp)
+        return resp
