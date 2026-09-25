@@ -69,10 +69,19 @@ def _track_session(user_id, access_token):
 
 @auth_ns.route("/register")
 class Register(Resource):
-    @auth_ns.expect(register_model)
+    @auth_ns.expect(register_model, validate=True)
     @limiter.limit("5/minute")
     def post(self):
         data = request.get_json()
+        for key in ('email', 'first_name', 'last_name'):
+            data[key] = data[key].strip()
+            if not data[key]:
+                return {"msg": f"{key.replace('_', ' ').title()} is required"}, 400
+        if any(len(data[key]) > 50 for key in ('first_name', 'last_name')):
+            return {"msg": "Names must contain at most 50 characters"}, 400
+        data['email'] = data['email'].lower()
+        if '@' not in data['email'] or len(data['email']) > 120:
+            return {"msg": "Enter a valid email address"}, 400
         # password strength
         errs = validate_password_strength(data["password"])
         if errs:
@@ -110,12 +119,12 @@ class Register(Resource):
 
 @auth_ns.route("/login")
 class Login(Resource):
-    @auth_ns.expect(login_model)
+    @auth_ns.expect(login_model, validate=True)
     @auth_ns.doc(model=token_model)
     @limiter.limit("10/minute")
     def post(self):
         data = request.get_json()
-        user = User.query.filter_by(email=data["email"]).first()
+        user = User.query.filter_by(email=data["email"].strip().lower()).first()
         if not user or not user.check_password(data["password"]):
             auth_ns.abort(401, "Bad credentials")
         if user.status != UserStatus.ACTIVE:
@@ -146,6 +155,8 @@ class Refresh(Resource):
     def post(self):
         uid = get_jwt_identity()
         user = User.query.get(int(uid))
+        if not user or user.status != UserStatus.ACTIVE:
+            return {"msg": "Account not active"}, 401
         roles = [r.name for r in user.roles] if user else []
         access = create_access_token(identity=str(uid), additional_claims={"roles": roles})
 
@@ -162,6 +173,24 @@ class Profile(Resource):
     def get(self):
         uid = int(get_jwt_identity())
         return User.query.get_or_404(uid).to_dict()
+
+    @jwt_required()
+    def patch(self):
+        """Update the signed-in user's name without exposing role changes."""
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return {"msg": "A JSON object is required"}, 400
+        user = db.session.get(User, int(get_jwt_identity()))
+        if not user:
+            return {"msg": "User not found"}, 404
+        for key in ('first_name', 'last_name'):
+            value = data.get(key)
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 50:
+                return {"msg": "First and last name must contain 1–80 characters"}, 400
+        user.first_name = data['first_name'].strip()
+        user.last_name = data['last_name'].strip()
+        db.session.commit()
+        return user.to_dict()
 
 
 @auth_ns.route("/password-reset")

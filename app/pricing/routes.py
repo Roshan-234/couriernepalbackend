@@ -4,6 +4,7 @@ from flask_jwt_extended import jwt_required
 from app.models.pricing import PricingRule
 from app.extensions import db
 from app.auth.utils import require_roles
+import math
 
 pricing_ns = Namespace('pricing', description='Pricing operations')
 
@@ -44,7 +45,7 @@ class PricingList(Resource):
     @pricing_ns.doc('create_pricing_rule')
     @pricing_ns.expect(pricing_model)
     @pricing_ns.marshal_with(pricing_model, code=201)
-    @jwt_required()
+    @require_roles('admin', 'super_admin')
     def post(self):
         """Create a new pricing rule"""
         data = pricing_ns.payload
@@ -67,7 +68,7 @@ class PricingItem(Resource):
     @pricing_ns.doc('update_pricing_rule')
     @pricing_ns.expect(pricing_model)
     @pricing_ns.marshal_with(pricing_model)
-    @jwt_required()
+    @require_roles('admin', 'super_admin')
     def put(self, id):
         """Update a pricing rule"""
         rule = PricingRule.query.get_or_404(id)
@@ -79,7 +80,7 @@ class PricingItem(Resource):
 
     @pricing_ns.doc('delete_pricing_rule')
     @pricing_ns.response(204, 'Pricing rule deleted')
-    @jwt_required()
+    @require_roles('admin', 'super_admin')
     def delete(self, id):
         """Delete a pricing rule"""
         rule = PricingRule.query.get_or_404(id)
@@ -91,10 +92,14 @@ class PricingItem(Resource):
 @pricing_ns.route('/calculate')
 class PricingCalculator(Resource):
     @pricing_ns.doc('calculate_price')
-    @pricing_ns.expect(price_calculation_model)
+    @pricing_ns.expect(price_calculation_model, validate=True)
     def post(self):
         """Calculate shipping price"""
         data = pricing_ns.payload
+        if not math.isfinite(data['weight']) or data['weight'] <= 0:
+            return {"message": "Weight must be a positive number"}, 400
+        if not math.isfinite(data.get('declared_value', 0)) or data.get('declared_value', 0) < 0:
+            return {"message": "Declared value must be non-negative"}, 400
         try:
             rule = PricingRule.query.filter_by(
                 service_type=data['service_type'],

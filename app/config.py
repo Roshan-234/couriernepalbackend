@@ -23,6 +23,7 @@ class Config:
     SQLALCHEMY_DATABASE_URI = "sqlite:///app.db"
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    RATELIMIT_STORAGE_URI = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
 
