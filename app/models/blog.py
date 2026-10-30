@@ -76,8 +76,7 @@ class BlogPost(db.Model):
             'category': self.category.to_dict(),
             'author': {
                 'id': self.author.id,
-                'name': f"{self.author.first_name} {self.author.last_name}",
-                'email': self.author.email
+                'name': f"{self.author.first_name} {self.author.last_name}"
             },
             'tags': [tag.to_dict() for tag in self.tags],
             'created_at': self.created_at.isoformat(),
@@ -129,8 +128,7 @@ class BlogComment(db.Model):
             'content': self.content,
             'author': {
                 'id': self.author.id,
-                'name': f"{self.author.first_name} {self.author.last_name}",
-                'email': self.author.email
+                'name': f"{self.author.first_name} {self.author.last_name}"
             },
             'created_at': self.created_at.isoformat(),
             'updated_at': self.updated_at.isoformat(),

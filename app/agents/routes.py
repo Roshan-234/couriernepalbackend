@@ -1,5 +1,5 @@
 from flask_restx import Namespace, Resource, fields
-from flask_jwt_extended import jwt_required
+from app.auth.utils import require_roles
 from app.models.agent import AgentProfile
 from app.extensions import db
 
@@ -24,7 +24,7 @@ agent_model = agent_ns.model('Agent', {
 class AgentList(Resource):
     @agent_ns.doc('list_agents')
     @agent_ns.marshal_list_with(agent_model)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def get(self):
         """List all agents"""
         return AgentProfile.query.all()
@@ -32,7 +32,7 @@ class AgentList(Resource):
     @agent_ns.doc('create_agent')
     @agent_ns.expect(agent_model)
     @agent_ns.marshal_with(agent_model, code=201)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def post(self):
         """Create a new agent"""
         data = agent_ns.payload
@@ -47,7 +47,7 @@ class AgentList(Resource):
 class Agent(Resource):
     @agent_ns.doc('get_agent')
     @agent_ns.marshal_with(agent_model)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def get(self, id):
         """Fetch an agent by ID"""
         return AgentProfile.query.get_or_404(id)
@@ -55,7 +55,7 @@ class Agent(Resource):
     @agent_ns.doc('update_agent')
     @agent_ns.expect(agent_model)
     @agent_ns.marshal_with(agent_model)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def put(self, id):
         """Update an agent"""
         agent = AgentProfile.query.get_or_404(id)
@@ -67,7 +67,7 @@ class Agent(Resource):
 
     @agent_ns.doc('delete_agent')
     @agent_ns.response(204, 'Agent deleted')
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def delete(self, id):
         """Delete an agent"""
         agent = AgentProfile.query.get_or_404(id)

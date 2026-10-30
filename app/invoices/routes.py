@@ -17,6 +17,8 @@ from flask import request, send_file, current_app
 from flask_restx import Namespace, Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
+from app.validation import document_data, json_object, pagination
+from werkzeug.exceptions import BadRequest
 from app.models.invoice import Invoice
 from app.models.user import User
 
@@ -44,6 +46,8 @@ def _compute_totals(data: dict) -> dict:
     discount    = float(data.get("discount", 0))
     tax_pct     = float(data.get("tax_percentage", 0))
     shipping    = float(data.get("shipping_charge", 0))
+    if discount > subtotal:
+        raise BadRequest("Discount cannot exceed subtotal")
     taxable     = subtotal - discount
     tax_amount  = round(taxable * tax_pct / 100, 2)
     total       = round(taxable + tax_amount + shipping, 2)
@@ -64,8 +68,7 @@ class InvoiceList(Resource):
     def get(self):
         uid  = int(get_jwt_identity())
         user = User.query.get_or_404(uid)
-        page     = int(request.args.get("page", 1))
-        per_page = min(int(request.args.get("per_page", 20)), 100)
+        page, per_page = pagination()
         status   = request.args.get("status")
         q = Invoice.query if _is_admin(user) else Invoice.query.filter_by(created_by=uid)
         if status:
@@ -83,7 +86,7 @@ class InvoiceList(Resource):
     @jwt_required()
     def post(self):
         uid  = int(get_jwt_identity())
-        data = request.get_json() or {}
+        data = document_data(json_object(), uid, "invoice")
         totals = _compute_totals(data)
 
         due = None
@@ -169,7 +172,7 @@ class InvoiceDetail(Resource):
         if inv.status not in ("draft",) and not _is_admin(user):
             inv_ns.abort(400, "Only draft invoices can be edited")
 
-        data = request.get_json() or {}
+        data = document_data(json_object(), uid, "invoice")
         updatable = [
             "seller_name","seller_address","seller_phone","seller_country","seller_tin",
             "buyer_name","buyer_address","buyer_phone","buyer_country","buyer_tin",

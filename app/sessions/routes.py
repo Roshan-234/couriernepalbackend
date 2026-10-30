@@ -1,4 +1,6 @@
 from flask import request
+from datetime import datetime
+from sqlalchemy import or_
 from flask_restx import Namespace, Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from app.extensions import db
@@ -20,7 +22,8 @@ class SessionList(Resource):
             sessions = UserSession.query.filter_by(is_revoked=False).order_by(UserSession.created_at.desc()).all()
         else:
             sessions = UserSession.query.filter_by(user_id=uid, is_revoked=False).all()
-        return [s.to_dict() for s in sessions]
+        return [{**s.to_dict(), "current": s.jti == get_jwt().get("sid")} for s in sessions
+                if s.expires_at is None or s.expires_at > datetime.utcnow()]
 
 @sessions_ns.route("/<int:session_id>")
 class SessionDetail(Resource):

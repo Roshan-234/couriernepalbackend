@@ -30,3 +30,6 @@ python-dotenv==1.1.1
 
 # MySQL driver used by ProductionConfig (mysql+pymysql://)
 PyMySQL==1.1.1
+
+# Invoice and packing-list workbook exports
+openpyxl==3.1.5

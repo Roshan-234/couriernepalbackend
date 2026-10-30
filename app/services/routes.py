@@ -1,5 +1,5 @@
 from flask_restx import Namespace, Resource, fields
-from flask_jwt_extended import jwt_required
+from app.auth.utils import require_roles
 from app.models.service import Service
 from app.extensions import db
 
@@ -28,7 +28,7 @@ class ServiceList(Resource):
     @service_ns.doc('create_service')
     @service_ns.expect(service_model)
     @service_ns.marshal_with(service_model, code=201)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def post(self):
         """Create a new service"""
         data = service_ns.payload
@@ -50,7 +50,7 @@ class ServiceItem(Resource):
     @service_ns.doc('update_service')
     @service_ns.expect(service_model)
     @service_ns.marshal_with(service_model)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def put(self, id):
         """Update a service"""
         service = Service.query.get_or_404(id)
@@ -62,7 +62,7 @@ class ServiceItem(Resource):
 
     @service_ns.doc('delete_service')
     @service_ns.response(204, 'Service deleted')
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def delete(self, id):
         """Delete a service"""
         service = Service.query.get_or_404(id)

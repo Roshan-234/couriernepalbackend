@@ -4,6 +4,8 @@ import uuid
 import math
 from datetime import datetime, timedelta
 from flask import request
+from sqlalchemy.orm import selectinload
+from app.validation import shipment_data, json_object, tracking_update
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.auth.utils import require_roles
@@ -153,7 +155,7 @@ def _build_shipment(data: dict, user_id: int) -> Shipment:
         total_packages=data.get("total_packages", 1),
         # Meta
         notes=data.get("notes", ""),
-        estimated_delivery=datetime.utcnow() + timedelta(days=7),
+        estimated_delivery=None,
     )
 
 
@@ -166,7 +168,7 @@ class ShipmentList(Resource):
     @require_roles("super_admin", "admin")
     def get(self):
         """List all shipments (admin only)."""
-        return Shipment.query.order_by(Shipment.created_at.desc()).all()
+        return Shipment.query.options(selectinload(Shipment.service), selectinload(Shipment.parcels), selectinload(Shipment.events)).order_by(Shipment.created_at.desc()).all()
 
     @ship_ns.expect(shipment_in, validate=True)
     @ship_ns.marshal_with(shipment_out, code=201)
@@ -174,14 +176,7 @@ class ShipmentList(Resource):
     def post(self):
         """Create a new shipment."""
         user_id = int(get_jwt_identity())
-        data = request.get_json(force=True)
-        if any(not data.get(key, '').strip() for key in ('origin', 'destination')):
-            ship_ns.abort(400, 'Origin and destination are required')
-        weight = data.get('total_weight_kg', 0)
-        if not math.isfinite(weight) or weight < 0:
-            ship_ns.abort(400, 'Weight must be a finite non-negative number')
-        if data.get('total_packages', 1) < 1:
-            ship_ns.abort(400, 'At least one package is required')
+        data = shipment_data(json_object())
 
         shipment = _build_shipment(data, user_id)
         db.session.add(shipment)
@@ -229,7 +224,7 @@ class ShipmentDetail(Resource):
     def put(self, id):
         """Update shipment status and add a tracking event."""
         shipment = Shipment.query.get_or_404(id)
-        data = request.get_json(force=True)
+        data = tracking_update(json_object())
         new_status = data.get("status")
         if not new_status or not new_status.strip():
             ship_ns.abort(400, 'A shipment status is required')
@@ -282,5 +277,5 @@ class MyShipments(Resource):
     def get(self):
         """List the current user's shipments."""
         user_id = int(get_jwt_identity())
-        return Shipment.query.filter_by(user_id=user_id) \
+        return Shipment.query.options(selectinload(Shipment.service), selectinload(Shipment.parcels), selectinload(Shipment.events)).filter_by(user_id=user_id) \
                              .order_by(Shipment.created_at.desc()).all()

@@ -1,4 +1,6 @@
 from flask import request
+from app.validation import json_object, text
+from werkzeug.exceptions import BadRequest
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import secrets
@@ -92,7 +94,34 @@ class UserDetail(Resource):
     @require_roles("admin", "super_admin")
     def put(self, id):
         u = User.query.get_or_404(id)
-        data = request.get_json()
+        data = json_object()
+        caller = db.session.get(User, int(get_jwt_identity()))
+        super_admin = any(role.name == 'super_admin' for role in caller.roles)
+        if any(role.name == 'super_admin' for role in u.roles) and not super_admin:
+            user_ns.abort(403, 'Only super_admin may edit administrator accounts')
+        if set(data) - {'email', 'first_name', 'last_name', 'status', 'roles'}:
+            user_ns.abort(400, 'Unknown user field')
+        if 'roles' in data:
+            if not super_admin:
+                user_ns.abort(403, 'Only super_admin may update roles')
+            if not isinstance(data['roles'], list) or not data['roles'] or not all(isinstance(r, str) for r in data['roles']):
+                user_ns.abort(400, 'Provide a non-empty list of roles')
+            known = {r.name for r in Role.query.all()}
+            if set(data['roles']) - known:
+                user_ns.abort(400, 'Unknown role')
+        if 'status' in data and data['status'] not in [s.value for s in UserStatus]:
+            user_ns.abort(400, 'Invalid account status')
+        if u.id == caller.id and (data.get('status', 'active') != 'active' or ('roles' in data and set(data['roles']) != {r.name for r in u.roles})):
+            user_ns.abort(400, 'You cannot disable or change your own roles')
+        for key in ('first_name', 'last_name'):
+            if key in data:
+                data[key] = text(data[key], key, 50, True)
+        if 'email' in data:
+            data['email'] = text(data['email'], 'email', 120, True).lower()
+            if '@' not in data['email']:
+                user_ns.abort(400, 'Invalid email address')
+            if User.query.filter(User.email == data['email'], User.id != id).first():
+                user_ns.abort(409, 'Email already registered')
         u.email      = data.get("email", u.email)
         u.first_name = data.get("first_name", u.first_name)
         u.last_name  = data.get("last_name", u.last_name)

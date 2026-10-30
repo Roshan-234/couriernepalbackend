@@ -1,4 +1,5 @@
 from flask import request
+from app.validation import tracking_update, json_object
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import jwt_required
 from app.models.tracking_event import TrackingEvent
@@ -54,13 +55,13 @@ class TrackingInfo(Resource):
 
 @tracking_ns.route('/<string:tracking_no>/events')
 class TrackingEventList(Resource):
-    @require_roles('super_admin', 'agent')
+    @require_roles('admin', 'super_admin', 'agent')
     @tracking_ns.expect(add_event_model)
     @tracking_ns.marshal_with(tracking_event_model, code=201)
     def post(self, tracking_no):
         """Add a tracking event to a shipment (agent/admin only)"""
         shipment = Shipment.query.filter_by(tracking_no=tracking_no).first_or_404()
-        data = request.get_json()
+        data = tracking_update(json_object())
         event = TrackingEvent(
             shipment_id=shipment.id,
             status=data['status'],

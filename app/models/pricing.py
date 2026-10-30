@@ -17,7 +17,7 @@ class PricingRule(db.Model):
     is_active = db.Column(db.Boolean, default=True)
 
     def calculate_price(self, weight, declared_value=0):
-        if weight < self.min_weight or (self.max_weight and weight > self.max_weight):
+        if weight < self.min_weight or (self.max_weight is not None and weight > self.max_weight):
             raise ValueError("Weight out of allowed range")
 
         shipping_cost = self.base_price + (weight * self.price_per_kg)
@@ -25,10 +25,10 @@ class PricingRule(db.Model):
         tax = ((shipping_cost + insurance_cost) * self.tax_percentage / 100)
         
         return {
-            "shipping_cost": shipping_cost,
-            "insurance_cost": insurance_cost,
-            "tax": tax,
-            "total_cost": shipping_cost + insurance_cost + tax
+            "shipping_cost": round(shipping_cost, 2),
+            "insurance_cost": round(insurance_cost, 2),
+            "tax": round(tax, 2),
+            "total_cost": round(shipping_cost + insurance_cost + tax, 2)
         }
 
     def to_dict(self):

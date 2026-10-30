@@ -13,8 +13,8 @@ from openpyxl.styles import (
 from openpyxl.utils import get_column_letter
 
 # ── Brand colours ────────────────────────────────────────────────────────────
-BRAND_BLUE   = "0C3E6F"   # dark blue header
-BRAND_ORANGE = "F27318"   # accent
+BRAND_BLUE   = "383772"   # dark blue header
+BRAND_ORANGE = "117B8E"   # accent
 LIGHT_GRAY   = "F3F4F6"   # alternate rows
 MID_GRAY     = "E5E7EB"
 WHITE        = "FFFFFF"

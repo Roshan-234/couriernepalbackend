@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from slugify import slugify
 from sqlalchemy import desc, or_
 from flask import request
+from app.auth.utils import require_roles
+from app.models.user import User
 
 blog_ns = Namespace('blog', description='Blog operations')
 
@@ -129,14 +131,16 @@ class BlogPostList(Resource):
         Query params: page, per_page, status, category (slug), tag (slug), search
         Returns: { data: [...], meta: { total, totalPages, currentPage, perPage } }
         """
-        page      = int(request.args.get('page', 1))
-        per_page  = int(request.args.get('per_page', 10))
+        from app.validation import pagination
+        page, per_page = pagination()
         status    = request.args.get('status', 'published')
         category  = request.args.get('category')
         tag       = request.args.get('tag')
         search    = request.args.get('search', '').strip()
 
         query = BlogPost.query
+        if status != 'published':
+            _require_editor()
 
         # Status filter
         if status and status != 'all':
@@ -185,7 +189,7 @@ class BlogPostList(Resource):
             }
         }
 
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def post(self):
         """Create a new blog post."""
         data = dict(request.get_json(force=True))
@@ -230,15 +234,17 @@ class BlogPostItem(Resource):
 
     def get(self, slug):
         post = BlogPost.query.filter_by(slug=slug).first_or_404()
+        if post.status != 'published':
+            _require_editor()
         post.views += 1
         db.session.commit()
         return _post_to_dict(post)
 
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def put(self, slug):
         return self._update(slug)
 
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def patch(self, slug):
         return self._update(slug)
 
@@ -270,7 +276,7 @@ class BlogPostItem(Resource):
         db.session.commit()
         return _post_to_dict(post)
 
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def delete(self, slug):
         post = BlogPost.query.filter_by(slug=slug).first_or_404()
         db.session.delete(post)
@@ -289,7 +295,7 @@ class BlogCategoryList(Resource):
 
     @blog_ns.expect(category_model)
     @blog_ns.marshal_with(category_model, code=201)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def post(self):
         data = dict(blog_ns.payload)
         if not data.get('name', '').strip():
@@ -320,7 +326,7 @@ class BlogCategoryItem(Resource):
 
     @blog_ns.expect(category_model)
     @blog_ns.marshal_with(category_model)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def put(self, slug):
         category = BlogCategory.query.filter_by(slug=slug).first_or_404()
         data = dict(blog_ns.payload)
@@ -331,7 +337,7 @@ class BlogCategoryItem(Resource):
         return category
 
     @blog_ns.response(204, 'Category deleted')
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def delete(self, slug):
         category = BlogCategory.query.filter_by(slug=slug).first_or_404()
         db.session.delete(category)
@@ -350,7 +356,7 @@ class BlogTagList(Resource):
 
     @blog_ns.expect(tag_model)
     @blog_ns.marshal_with(tag_model, code=201)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def post(self):
         data = dict(blog_ns.payload)
         if not data.get('name', '').strip():
@@ -380,7 +386,7 @@ class BlogTagItem(Resource):
         return BlogTag.query.filter_by(slug=slug).first_or_404()
 
     @blog_ns.response(204, 'Tag deleted')
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def delete(self, slug):
         tag = BlogTag.query.filter_by(slug=slug).first_or_404()
         db.session.delete(tag)
@@ -394,55 +400,72 @@ class BlogTagItem(Resource):
 @blog_ns.response(404, 'Post not found')
 class BlogPostComments(Resource):
 
-    @blog_ns.marshal_list_with(comment_model)
     def get(self, slug):
-        post = BlogPost.query.filter_by(slug=slug).first_or_404()
-        return BlogComment.query.filter_by(post_id=post.id, parent_id=None) \
-                                .order_by(desc(BlogComment.created_at)).all()
+        post = BlogPost.query.filter_by(slug=slug, status='published').first_or_404()
+        comments = BlogComment.query.filter_by(post_id=post.id, parent_id=None).order_by(desc(BlogComment.created_at)).all()
+        return [comment.to_dict() for comment in comments]
 
     @blog_ns.expect(comment_model)
-    @blog_ns.marshal_with(comment_model, code=201)
     @jwt_required()
     def post(self, slug):
-        post = BlogPost.query.filter_by(slug=slug).first_or_404()
-        data = dict(blog_ns.payload)
-        data['post_id']   = post.id
-        data['author_id'] = int(get_jwt_identity())
-        for k in ['id', 'created_at', 'updated_at']:
-            data.pop(k, None)
-        comment = BlogComment(**data)
+        post = BlogPost.query.filter_by(slug=slug, status='published').first_or_404()
+        from app.validation import json_object, text
+        data = json_object()
+        content = text(data.get('content'), 'Comment', 5000, True)
+        parent_id = data.get('parent_id')
+        if parent_id is not None:
+            if type(parent_id) is not int:
+                blog_ns.abort(400, 'Invalid parent comment')
+            parent = BlogComment.query.filter_by(id=parent_id, post_id=post.id).first()
+            if not parent:
+                blog_ns.abort(400, 'Parent comment does not belong to this post')
+            parent_id = parent.parent_id or parent.id
+        comment = BlogComment(content=content, post_id=post.id, author_id=int(get_jwt_identity()), parent_id=parent_id)
         db.session.add(comment)
         db.session.commit()
-        return comment, 201
+        return comment.to_dict(), 201
 
 
 @blog_ns.route('/posts/<string:slug>/comments/<int:comment_id>')
 @blog_ns.response(404, 'Comment not found')
 class BlogPostComment(Resource):
 
-    @blog_ns.marshal_with(comment_model)
     def get(self, slug, comment_id):
-        post = BlogPost.query.filter_by(slug=slug).first_or_404()
-        return BlogComment.query.filter_by(post_id=post.id, id=comment_id).first_or_404()
+        post = BlogPost.query.filter_by(slug=slug, status='published').first_or_404()
+        return BlogComment.query.filter_by(post_id=post.id, id=comment_id).first_or_404().to_dict()
 
     @blog_ns.expect(comment_model)
-    @blog_ns.marshal_with(comment_model)
     @jwt_required()
     def put(self, slug, comment_id):
-        post    = BlogPost.query.filter_by(slug=slug).first_or_404()
+        post    = BlogPost.query.filter_by(slug=slug, status='published').first_or_404()
         comment = BlogComment.query.filter_by(post_id=post.id, id=comment_id).first_or_404()
+        caller = db.session.get(User, int(get_jwt_identity()))
+        if comment.author_id != caller.id and not caller.is_admin:
+            blog_ns.abort(403, 'You may only modify your own comments')
         data    = dict(blog_ns.payload)
-        data.pop('author_id', None)
-        for key, value in data.items():
-            setattr(comment, key, value)
+        content = data.get('content')
+        if not isinstance(content, str) or not content.strip():
+            blog_ns.abort(400, 'Content is required')
+        comment.content = content.strip()
         db.session.commit()
-        return comment
+        return comment.to_dict()
 
     @blog_ns.response(204, 'Comment deleted')
     @jwt_required()
     def delete(self, slug, comment_id):
-        post    = BlogPost.query.filter_by(slug=slug).first_or_404()
+        post    = BlogPost.query.filter_by(slug=slug, status='published').first_or_404()
         comment = BlogComment.query.filter_by(post_id=post.id, id=comment_id).first_or_404()
+        caller = db.session.get(User, int(get_jwt_identity()))
+        if comment.author_id != caller.id and not caller.is_admin:
+            blog_ns.abort(403, 'You may only modify your own comments')
         db.session.delete(comment)
         db.session.commit()
         return '', 204
+
+
+def _require_editor():
+    from flask_jwt_extended import verify_jwt_in_request
+    verify_jwt_in_request()
+    user = db.session.get(User, int(get_jwt_identity()))
+    if not user.is_admin:
+        blog_ns.abort(403, "Admin privileges required")

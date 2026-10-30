@@ -34,146 +34,97 @@ price_calculation_model = pricing_ns.model('PriceCalculation', {
 })
 
 
+from app.validation import json_object, number, text
+from sqlalchemy import or_
+from werkzeug.exceptions import BadRequest
+
+
+def clean_rule(data, existing=None):
+    allowed = set(pricing_model) - {'id'}
+    if set(data) - allowed:
+        raise BadRequest('Unknown or read-only pricing field')
+    values = existing.to_dict() if existing else {'min_weight': 0, 'max_weight': None,
+        'insurance_percentage': 0, 'tax_percentage': 0, 'is_active': True}
+    values.update(data)
+    values.pop('id', None)
+    for key, limit in [('service_type', 50), ('shipment_type', 50), ('origin_country', 100), ('destination_country', 100)]:
+        values[key] = text(values.get(key), key, limit, True)
+    for key in ['base_price', 'price_per_kg', 'min_weight', 'insurance_percentage', 'tax_percentage']:
+        number(values.get(key), key)
+    if values['max_weight'] is not None:
+        number(values['max_weight'], 'max_weight', values['min_weight'])
+    if any(values[key] > 100 for key in ['insurance_percentage', 'tax_percentage']):
+        raise BadRequest('Percentages cannot exceed 100')
+    if type(values['is_active']) is not bool:
+        raise BadRequest('is_active must be a boolean')
+    return values
+
+
+def save_rule(existing=None):
+    values = clean_rule(json_object(), existing)
+    rule = existing or PricingRule()
+    for key, value in values.items():
+        setattr(rule, key, value)
+    db.session.add(rule)
+    db.session.commit()
+    return rule.to_dict(), 200 if existing else 201
+
+
 @pricing_ns.route('/')
 class PricingList(Resource):
-    @pricing_ns.doc('list_pricing_rules')
-    @pricing_ns.marshal_list_with(pricing_model)
     def get(self):
-        """List all pricing rules"""
-        return PricingRule.query.filter_by(is_active=True).all()
+        return [r.to_dict() for r in PricingRule.query.filter_by(is_active=True).all()]
 
-    @pricing_ns.doc('create_pricing_rule')
-    @pricing_ns.expect(pricing_model)
-    @pricing_ns.marshal_with(pricing_model, code=201)
     @require_roles('admin', 'super_admin')
     def post(self):
-        """Create a new pricing rule"""
-        data = pricing_ns.payload
-        rule = PricingRule(**data)
-        db.session.add(rule)
-        db.session.commit()
-        return rule, 201
+        return save_rule()
 
 
 @pricing_ns.route('/<int:id>')
-@pricing_ns.response(404, 'Pricing rule not found')
-@pricing_ns.param('id', 'The pricing rule identifier')
+@pricing_ns.route('/rules/<int:id>')
 class PricingItem(Resource):
-    @pricing_ns.doc('get_pricing_rule')
-    @pricing_ns.marshal_with(pricing_model)
+    @require_roles('admin', 'super_admin')
     def get(self, id):
-        """Fetch a pricing rule by ID"""
-        return PricingRule.query.get_or_404(id)
+        return PricingRule.query.get_or_404(id).to_dict()
 
-    @pricing_ns.doc('update_pricing_rule')
-    @pricing_ns.expect(pricing_model)
-    @pricing_ns.marshal_with(pricing_model)
     @require_roles('admin', 'super_admin')
     def put(self, id):
-        """Update a pricing rule"""
-        rule = PricingRule.query.get_or_404(id)
-        data = pricing_ns.payload
-        for key, value in data.items():
-            setattr(rule, key, value)
-        db.session.commit()
-        return rule
+        return save_rule(PricingRule.query.get_or_404(id))
 
-    @pricing_ns.doc('delete_pricing_rule')
-    @pricing_ns.response(204, 'Pricing rule deleted')
     @require_roles('admin', 'super_admin')
     def delete(self, id):
-        """Delete a pricing rule"""
         rule = PricingRule.query.get_or_404(id)
-        db.session.delete(rule)
+        rule.is_active = False
         db.session.commit()
-        return '', 204
+        return {'message': 'Rule deactivated successfully'}
+
+
+@pricing_ns.route('/rules')
+class PricingRules(Resource):
+    @require_roles('admin', 'super_admin')
+    def get(self):
+        return {'rules': [r.to_dict() for r in PricingRule.query.order_by(PricingRule.id).all()]}
+
+    @require_roles('admin', 'super_admin')
+    def post(self):
+        return save_rule()
 
 
 @pricing_ns.route('/calculate')
 class PricingCalculator(Resource):
-    @pricing_ns.doc('calculate_price')
     @pricing_ns.expect(price_calculation_model, validate=True)
     def post(self):
-        """Calculate shipping price"""
-        data = pricing_ns.payload
-        if not math.isfinite(data['weight']) or data['weight'] <= 0:
-            return {"message": "Weight must be a positive number"}, 400
-        if not math.isfinite(data.get('declared_value', 0)) or data.get('declared_value', 0) < 0:
-            return {"message": "Declared value must be non-negative"}, 400
-        try:
-            rule = PricingRule.query.filter_by(
-                service_type=data['service_type'],
-                shipment_type=data['shipment_type'],
-                origin_country=data['origin_country'],
-                destination_country=data['destination_country'],
-                is_active=True
-            ).first_or_404()
-            
-            return rule.calculate_price(
-                data['weight'],
-                data.get('declared_value', 0)
-            )
-        except ValueError as e:
-            return {"message": str(e)}, 400
-
-
-@pricing_ns.route("/rules")
-class PricingRules(Resource):
-    @jwt_required()
-    @require_roles("super_admin", "admin")
-    def get(self):
-        """Get all pricing rules (Admin only)"""
-        rules = PricingRule.query.filter_by(is_active=True).all()
-        return {"rules": [rule.to_dict() for rule in rules]}
-
-    @jwt_required()
-    @require_roles("super_admin", "admin")
-    def post(self):
-        """Create a new pricing rule (Admin only)"""
-        data = request.get_json()
-        rule = PricingRule(
-            service_type=data['service_type'],
-            shipment_type=data['shipment_type'],
-            origin_country=data['origin_country'],
-            destination_country=data['destination_country'],
-            base_price=data['base_price'],
-            price_per_kg=data['price_per_kg'],
-            min_weight=data.get('min_weight', 0),
-            max_weight=data.get('max_weight'),
-            insurance_percentage=data.get('insurance_percentage', 0),
-            tax_percentage=data.get('tax_percentage', 0)
-        )
-        db.session.add(rule)
-        db.session.commit()
-        return rule.to_dict(), 201
-
-
-@pricing_ns.route("/rules/<int:id>")
-class PricingRuleDetail(Resource):
-    @jwt_required()
-    @require_roles("super_admin", "admin")
-    def get(self, id):
-        """Get pricing rule details (Admin only)"""
-        rule = PricingRule.query.get_or_404(id)
-        return rule.to_dict()
-
-    @jwt_required()
-    @require_roles("super_admin", "admin")
-    def put(self, id):
-        """Update pricing rule (Admin only)"""
-        rule = PricingRule.query.get_or_404(id)
-        data = request.get_json()
-        for key, value in data.items():
-            if hasattr(rule, key):
-                setattr(rule, key, value)
-        db.session.commit()
-        return rule.to_dict()
-
-    @jwt_required()
-    @require_roles("super_admin", "admin")
-    def delete(self, id):
-        """Delete pricing rule (Admin only)"""
-        rule = PricingRule.query.get_or_404(id)
-        rule.is_active = False
-        db.session.commit()
-        return {"message": "Rule deactivated successfully"}
+        data = json_object()
+        weight = number(data.get('weight'), 'Weight')
+        if weight <= 0:
+            raise BadRequest('Weight must be positive')
+        declared = number(data.get('declared_value', 0), 'Declared value')
+        route = {key: text(data.get(key), key, 100, True) for key in
+                 ['service_type', 'shipment_type', 'origin_country', 'destination_country']}
+        rule = PricingRule.query.filter_by(**route, is_active=True).filter(
+            PricingRule.min_weight <= weight,
+            or_(PricingRule.max_weight.is_(None), PricingRule.max_weight >= weight)
+        ).order_by(PricingRule.min_weight.desc(), PricingRule.id.asc()).first()
+        if not rule:
+            return {'message': 'No rate is configured for this route and weight. Contact us for a quote.'}, 404
+        return rule.calculate_price(weight, declared)

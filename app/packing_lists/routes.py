@@ -16,6 +16,8 @@ from flask import request, send_file, current_app
 from flask_restx import Namespace, Resource
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
+from app.validation import document_data, json_object, pagination
+from werkzeug.exceptions import BadRequest
 from app.models.packing_list import PackingList
 from app.models.user import User
 
@@ -41,8 +43,7 @@ class PackingListList(Resource):
     def get(self):
         uid  = int(get_jwt_identity())
         user = User.query.get_or_404(uid)
-        page     = int(request.args.get("page", 1))
-        per_page = min(int(request.args.get("per_page", 20)), 100)
+        page, per_page = pagination()
         status   = request.args.get("status")
         q        = PackingList.query if _is_admin(user) else PackingList.query.filter_by(created_by=uid)
         if status:
@@ -60,7 +61,7 @@ class PackingListList(Resource):
     @jwt_required()
     def post(self):
         uid  = int(get_jwt_identity())
-        data = request.get_json() or {}
+        data = document_data(json_object(), uid, "packing")
 
         items = data.get("items", [])
         total_wt  = sum(float(i.get("total_weight_kg") or (i.get("quantity",0)*i.get("unit_weight_kg",0))) for i in items)
@@ -135,7 +136,7 @@ class PackingListDetail(Resource):
         if pl.status == "finalized" and not _is_admin(user):
             pl_ns.abort(400, "Finalized packing lists cannot be edited")
 
-        data = request.get_json() or {}
+        data = document_data(json_object(), uid, "packing")
         updatable = [
             "sender_name","sender_address","sender_phone","sender_country",
             "receiver_name","receiver_address","receiver_phone","receiver_country",

@@ -20,7 +20,7 @@ def create_app(env='default'):
     db.init_app(app)
     migrate.init_app(app, db)
     bcrypt.init_app(app)
-    cors.init_app(app, resources={r"/api/*": {"origins": "*"}})
+    cors.init_app(app, resources={r"/api/*": {"origins": app.config["FRONTEND_URL"]}})
     limiter.init_app(app)
     jwt.init_app(app)
     mail.init_app(app)
@@ -32,7 +32,17 @@ def create_app(env='default'):
     @jwt.token_in_blocklist_loader
     def check_if_revoked(jwt_header, jwt_payload):
         from app.models.user_session import UserSession
-        return UserSession.query.filter_by(jti=jwt_payload.get("jti", ""), is_revoked=True).first() is not None
+        from app.models.user import User, UserStatus
+        from datetime import datetime
+        try:
+            uid = int(jwt_payload.get("sub", ""))
+        except (TypeError, ValueError):
+            return True
+        user = db.session.get(User, uid)
+        session = UserSession.query.filter_by(jti=jwt_payload.get("sid", ""), user_id=uid).first()
+        return (not user or user.status != UserStatus.ACTIVE or not session
+                or session.is_revoked
+                or (session.expires_at is not None and session.expires_at <= datetime.utcnow()))
 
     # Audit middleware
     from app.middleware.audit import audit_request
@@ -47,4 +57,6 @@ def create_app(env='default'):
         db.create_all()
         seed_roles()
 
+    from app.cli import register_commands
+    register_commands(app)
     return app

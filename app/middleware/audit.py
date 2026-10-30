@@ -91,8 +91,10 @@ def audit_request(response):
             status_code=response.status_code,
             timestamp=datetime.utcnow(),
         )
+        # Discard pending mutations left by a rejected request before logging it.
+        db.session.rollback()
         db.session.add(log)
         db.session.commit()
     except Exception:
-        pass  # Never let audit logging break the actual response
+        db.session.rollback()  # Leave the connection usable after logging fails.
     return response

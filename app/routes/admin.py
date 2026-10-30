@@ -26,7 +26,7 @@ def _revenue_between(start, end=None):
     if end is None:
         q = q.filter(func.date(Invoice.created_at) >= start)
     else:
-        q = q.filter(func.date(Invoice.created_at).between(start, end))
+        q = q.filter((func.date(Invoice.created_at) >= start) & (func.date(Invoice.created_at) < end))
     return float(q.scalar() or 0.0)
 
 
@@ -54,7 +54,7 @@ def get_dashboard_stats():
         func.date(Shipment.created_at) >= thirty_days_ago
     ).count()
     previous_shipments = Shipment.query.filter(
-        func.date(Shipment.created_at).between(previous_thirty_days, thirty_days_ago)
+        func.date(Shipment.created_at) >= previous_thirty_days, func.date(Shipment.created_at) < thirty_days_ago
     ).count()
 
     # Revenue (from issued/paid invoices)
@@ -67,23 +67,19 @@ def get_dashboard_stats():
         func.date(User.created_at) >= thirty_days_ago
     ).count()
     previous_customers = customer_q.filter(
-        func.date(User.created_at).between(previous_thirty_days, thirty_days_ago)
+        (func.date(User.created_at) >= previous_thirty_days) & (func.date(User.created_at) < thirty_days_ago)
     ).count()
 
-    # Average delivery time in hours for delivered shipments (SQLite-safe).
-    # julianday() returns fractional days; * 24 -> hours.
-    avg_delivery_time = db.session.query(
-        func.avg((func.julianday(Shipment.updated_at) - func.julianday(Shipment.created_at)) * 24.0)
-    ).filter(
-        Shipment.status == 'delivered',
-        func.date(Shipment.created_at) >= thirty_days_ago,
-    ).scalar() or 0
-    previous_avg_delivery_time = db.session.query(
-        func.avg((func.julianday(Shipment.updated_at) - func.julianday(Shipment.created_at)) * 24.0)
-    ).filter(
-        Shipment.status == 'delivered',
-        func.date(Shipment.created_at).between(previous_thirty_days, thirty_days_ago),
-    ).scalar() or 0
+    def average_delivery(start, end=None):
+        query = db.session.query(Shipment.created_at, Shipment.updated_at).filter(
+            Shipment.status == 'delivered', Shipment.created_at >= start)
+        if end:
+            query = query.filter(Shipment.created_at < end)
+        durations = [(updated - created).total_seconds() / 3600 for created, updated in query if updated]
+        return sum(durations) / len(durations) if durations else 0
+
+    avg_delivery_time = average_delivery(thirty_days_ago)
+    previous_avg_delivery_time = average_delivery(previous_thirty_days, thirty_days_ago)
 
     return jsonify({
         'totalShipments': current_shipments,
@@ -156,13 +152,13 @@ def get_revenue_analytics():
         cursor = (month_start - timedelta(days=1)).replace(day=1)
 
     for month_start, month_end in reversed(months):
-        revenue = _revenue_between(month_start, month_end)
-        expenses = revenue * 0.6  # estimated operating cost
+        revenue = _revenue_between(month_start, month_end + timedelta(days=1))
+        expenses = None  # No expense ledger exists; do not invent financial data.
         revenue_data.append(round(revenue, 2))
-        expenses_data.append(round(expenses, 2))
+        expenses_data.append(expenses)
         labels.append(month_start.strftime('%B %Y'))
 
-    profit_data = [round(rev - exp, 2) for rev, exp in zip(revenue_data, expenses_data)]
+    profit_data = [None] * len(revenue_data)
 
     return jsonify({
         'labels': labels,

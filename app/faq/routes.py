@@ -1,5 +1,5 @@
 from flask_restx import Namespace, Resource, fields
-from flask_jwt_extended import jwt_required
+from app.auth.utils import require_roles
 from app.models.faq import FAQ
 from app.extensions import db
 
@@ -26,7 +26,7 @@ class FAQList(Resource):
     @faq_ns.doc('create_faq')
     @faq_ns.expect(faq_model)
     @faq_ns.marshal_with(faq_model, code=201)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def post(self):
         """Create a new FAQ"""
         data = faq_ns.payload
@@ -48,7 +48,7 @@ class FAQItem(Resource):
     @faq_ns.doc('update_faq')
     @faq_ns.expect(faq_model)
     @faq_ns.marshal_with(faq_model)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def put(self, id):
         """Update a FAQ"""
         faq = FAQ.query.get_or_404(id)
@@ -60,7 +60,7 @@ class FAQItem(Resource):
 
     @faq_ns.doc('delete_faq')
     @faq_ns.response(204, 'FAQ deleted')
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def delete(self, id):
         """Delete a FAQ"""
         faq = FAQ.query.get_or_404(id)

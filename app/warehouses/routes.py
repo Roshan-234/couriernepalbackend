@@ -1,5 +1,5 @@
 from flask_restx import Namespace, Resource, fields
-from flask_jwt_extended import jwt_required
+from app.auth.utils import require_roles
 from app.models.warehouse import Warehouse
 from app.extensions import db
 
@@ -32,7 +32,7 @@ class WarehouseList(Resource):
     @warehouse_ns.doc('create_warehouse')
     @warehouse_ns.expect(warehouse_model)
     @warehouse_ns.marshal_with(warehouse_model, code=201)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def post(self):
         """Create a new warehouse"""
         data = warehouse_ns.payload or {}
@@ -63,7 +63,7 @@ class WarehouseItem(Resource):
     @warehouse_ns.doc('update_warehouse')
     @warehouse_ns.expect(warehouse_model)
     @warehouse_ns.marshal_with(warehouse_model)
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def put(self, id):
         """Update a warehouse"""
         warehouse = Warehouse.query.get_or_404(id)
@@ -77,7 +77,7 @@ class WarehouseItem(Resource):
 
     @warehouse_ns.doc('delete_warehouse')
     @warehouse_ns.response(204, 'Warehouse deleted')
-    @jwt_required()
+    @require_roles("admin", "super_admin")
     def delete(self, id):
         """Delete a warehouse"""
         warehouse = Warehouse.query.get_or_404(id)

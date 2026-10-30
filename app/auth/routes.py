@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from flask import current_app, request, url_for, g, make_response
 from flask_restx import Namespace, Resource, fields
 from flask_jwt_extended import (
@@ -51,17 +52,18 @@ token_model = auth_ns.model("TokenResponse", {
     }))
 })
 
-def _track_session(user_id, access_token):
+def _track_session(user_id, access_token, refresh_token):
     """Persist a revocable UserSession row for a freshly issued access token."""
     from app.models.user_session import UserSession
     from datetime import timedelta
-    jti = decode_token(access_token)["jti"]
+    claims = decode_token(refresh_token)
+    jti = decode_token(access_token)["sid"]
     session = UserSession(
         user_id=user_id,
         jti=jti,
         ip_address=request.remote_addr,
         user_agent=(request.user_agent.string or "")[:500] if request.user_agent else "",
-        expires_at=datetime.utcnow() + timedelta(hours=1),
+        expires_at=datetime.utcfromtimestamp(claims["exp"]) if claims.get("exp") else None,
     )
     db.session.add(session)
     db.session.commit()
@@ -92,7 +94,7 @@ class Register(Resource):
             return {"msg": "Email already registered"}, 409
 
         # username from email
-        base = data["email"].split("@")[0]
+        base = data["email"].split("@")[0][:70]
         uname = base
         i = 1
         while User.query.filter_by(username=uname).first():
@@ -107,11 +109,8 @@ class Register(Resource):
         )
         u.set_password(data["password"])
 
-        # first user → super_admin, else customer
-        if User.query.count() == 0:
-            u.roles.append(Role.query.filter_by(name="super_admin").first())
-        else:
-            u.roles.append(Role.query.filter_by(name="customer").first())
+        # Public signup must never bootstrap privileged accounts.
+        u.roles.append(Role.query.filter_by(name="customer").one())
 
         db.session.add(u)
         db.session.commit()
@@ -131,10 +130,10 @@ class Login(Resource):
             auth_ns.abort(403, "Account not active")
 
         roles = [r.name for r in user.roles]
-        access  = create_access_token(identity=str(user.id), additional_claims={"roles": roles})
-        refresh = create_refresh_token(identity=str(user.id))
-
-        _track_session(user.id, access)
+        sid = uuid.uuid4().hex
+        access = create_access_token(identity=str(user.id), additional_claims={"roles": roles, "sid": sid})
+        refresh = create_refresh_token(identity=str(user.id), additional_claims={"sid": sid})
+        _track_session(user.id, access, refresh)
 
         # Let the audit middleware capture this user's id (no JWT on the login request itself)
         g.audit_user_id = user.id
@@ -158,10 +157,8 @@ class Refresh(Resource):
         if not user or user.status != UserStatus.ACTIVE:
             return {"msg": "Account not active"}, 401
         roles = [r.name for r in user.roles] if user else []
-        access = create_access_token(identity=str(uid), additional_claims={"roles": roles})
-
-        # New access token gets its own tracked, revocable session row.
-        _track_session(int(uid), access)
+        from flask_jwt_extended import get_jwt
+        access = create_access_token(identity=str(uid), additional_claims={"roles": roles, "sid": get_jwt()["sid"]})
 
         resp = make_response({"access_token": access}, 200)
         set_access_cookies(resp, access)
@@ -186,7 +183,7 @@ class Profile(Resource):
         for key in ('first_name', 'last_name'):
             value = data.get(key)
             if not isinstance(value, str) or not value.strip() or len(value.strip()) > 50:
-                return {"msg": "First and last name must contain 1–80 characters"}, 400
+                return {"msg": "First and last name must contain 1–50 characters"}, 400
         user.first_name = data['first_name'].strip()
         user.last_name = data['last_name'].strip()
         db.session.commit()
@@ -205,12 +202,12 @@ class PasswordResetRequest(Resource):
         except ValidationError as err:
             return {"msg": "Validation error", "errors": err.messages}, 400
 
-        user = User.query.filter_by(email=valid["email"]).first()
+        user = User.query.filter_by(email=valid["email"].strip().lower()).first()
         if user:
             try:
                 token = user.generate_reset_token()
                 # Use environment or fallback
-                frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+                frontend_url = current_app.config["FRONTEND_URL"]
                 reset_url = f"{frontend_url}/auth/reset-password?token={token}"
 
                 msg = Message(
@@ -250,6 +247,11 @@ class PasswordResetConfirm(Resource):
         if not user.password_reset_expires or user.password_reset_expires < datetime.utcnow():
             return {"msg": "Token has expired"}, 400
 
+        errors = validate_password_strength(valid["password"])
+        if errors:
+            return {"msg": "Weak password", "errors": errors}, 400
+        from app.models.user_session import UserSession
+        UserSession.query.filter_by(user_id=user.id).update({"is_revoked": True})
         user.set_password(valid["password"])
         user.password_reset_token = None
         user.password_reset_expires = None
@@ -265,7 +267,7 @@ class Logout(Resource):
     def post(self):
         from flask_jwt_extended import get_jwt
         from app.models.user_session import UserSession
-        jti = get_jwt().get("jti")
+        jti = get_jwt().get("sid")
         if jti:
             sess = UserSession.query.filter_by(jti=jti).first()
             if sess:
