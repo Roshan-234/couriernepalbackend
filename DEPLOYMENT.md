@@ -4,7 +4,7 @@ Production domain: **https://couriernepal.com**. The frontend is a Node.js Next.
 
 ## 1. Local setup (Windows PowerShell)
 
-Install Node.js 22.23.4 (or a newer patched 22.x release), Python 3.12 or 3.13, and Git. Clone the repositories next to each other:
+Install Node.js 24.22.2 (or a newer patched 24.x release), Python 3.12 or 3.13, and Git. Clone the repositories next to each other:
 
 ```powershell
 git clone https://github.com/Roshan-234/couriernepalbackend.git
@@ -49,11 +49,11 @@ npm start
 
 On constrained Windows hosts, set `$env:NEXT_LOW_MEMORY_BUILD='1'`. To isolate a stale build directory, set `$env:NEXT_DIST_DIR='.next-release'` for **both** build and start. Do not run a build against a directory currently used by a running server.
 
-Use the declared Node version (`.nvmrc` and `package.json` engines). The full local production build and runtime are verified on Node 22.23.4; the older system Node 24.12.0 produced streaming cancellation errors. Do not assume any older Node patch is interchangeable.
+Use the declared Node version (`.nvmrc` and `package.json` engines). Production rendering, API integration and early client disconnects are verified on Node 24.22.2. Node 22.23.4 and 24.12.0 reproduced an upstream streaming cancellation race; the patched 24.x runtime resolved it. See the [Node.js fix](https://github.com/nodejs/node/pull/62040). Do not assume any older Node patch is interchangeable.
 
 ## 2. Confirm cPanel capabilities before deployment
 
-Your host must provide Node.js 22.23.4 or newer 22.x, Python 3.12+, Passenger/Application Manager (or CloudLinux “Setup Node.js App” and “Setup Python App”), MySQL 8 or compatible MariaDB, HTTPS certificates and shared Redis storage. Ask your host for these features if absent. Some cPanel plans support only PHP: this project cannot run fully on those plans. Redis credentials may come from a TLS-enabled managed Redis provider if your host permits outbound access.
+Your host must provide Node.js 24.22.2 or newer 24.x, Python 3.12+, Passenger/Application Manager (or CloudLinux “Setup Node.js App” and “Setup Python App”), MySQL 8 or compatible MariaDB, HTTPS certificates and shared Redis storage. Ask your host for these features if absent. Some cPanel plans support only PHP: this project cannot run fully on those plans. Redis credentials may come from a TLS-enabled managed Redis provider if your host permits outbound access.
 
 This repository prepares deployment files; it does not provision DNS, certificates, a Redis service, MySQL accounts or SMTP credentials. Do not expose application roots or `.env` files under a static `public_html` directory.
 
@@ -111,7 +111,7 @@ Configure SMTP host, port, TLS/SSL, username, password and sender using real pro
 
 ## 4. Configure and build the frontend
 
-In Setup Node.js App/Application Manager, select Node.js 22.23.4 or newer 22.x, production mode, the frontend root and startup file **app.js**. Configure these server variables before building and starting:
+In Setup Node.js App/Application Manager, select Node.js 24.22.2 or newer 24.x, production mode, the frontend root and startup file **app.js**. Configure these server variables before building and starting:
 
 ```dotenv
 NODE_ENV=production
