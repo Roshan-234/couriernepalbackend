@@ -4,6 +4,7 @@ from .role import Role, UserRole
 
 def register_models():
     """Import all models to register them with SQLAlchemy."""
+    from .site_page import SitePage
     from .agent import AgentProfile
     from .blog import BlogPost, BlogCategory, BlogTag, BlogComment
     from .contact import ContactForm
@@ -25,6 +26,7 @@ def seed_roles():
     """Ensure default roles, services, and FAQs exist in the database."""
     defaults = [
         ("super_admin", "Full system access"),
+        ("admin", "Operations administrator"),
         ("customer",    "Regular customer"),
         ("agent",       "Delivery agent"),
     ]
@@ -32,10 +34,14 @@ def seed_roles():
         if not Role.query.filter_by(name=name).first():
             db.session.add(Role(name=name, description=desc))
     db.session.commit()
-    _seed_faqs()
-    _seed_services()
-    _seed_pricing_rules()
-    _seed_tracking_providers()
+    from app.content.seed import seed_content
+    seed_content()
+    # Demo rates/claims must never be enabled automatically in production.
+    from flask import current_app
+    if current_app.testing:
+        _seed_faqs()
+        _seed_services()
+        _seed_tracking_providers()
 
 def _seed_faqs():
     from .faq import FAQ

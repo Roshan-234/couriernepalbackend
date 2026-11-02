@@ -7,6 +7,27 @@ from app.auth.utils import validate_password_strength
 
 
 def register_commands(app):
+    @app.cli.command('seed-content')
+    def seed_content_command():
+        from app.models import seed_roles
+        seed_roles()
+        click.echo('Roles and starter pages initialized; existing content preserved')
+
+    @app.cli.command('schema-check')
+    def schema_check():
+        from sqlalchemy import inspect
+        inspector = inspect(db.engine)
+        errors = []
+        for table in db.metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                errors.append(f'Missing table: {table.name}')
+                continue
+            existing = {column['name'] for column in inspector.get_columns(table.name)}
+            errors.extend(f'Missing column: {table.name}.{column.name}' for column in table.columns if column.name not in existing)
+        if errors:
+            raise click.ClickException('\n'.join(errors))
+        click.echo('All model tables and columns present; this does not audit types, indexes or data')
+
     @app.cli.command('create-admin')
     @click.option('--email', prompt=True)
     @click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True)

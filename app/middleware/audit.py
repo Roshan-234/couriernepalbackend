@@ -3,7 +3,7 @@ from flask import request, g
 from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 
 # Paths to never log (to avoid infinite loops or noise)
-SKIP_PATHS = ["/api/docs", "/api/health", "/static", "/favicon", "/api/swagger"]
+SKIP_PATHS = ["/api/docs", "/api/health", "/static", "/favicon", "/api/swagger", "/api/content/pages", "/api/content/page"]
 
 
 def _derive_action(method, path):

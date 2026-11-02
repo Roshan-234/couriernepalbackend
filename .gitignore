@@ -26,3 +26,5 @@ qa_server.log
 # ── OS ──────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+!.env.local.example

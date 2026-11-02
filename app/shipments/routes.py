@@ -279,3 +279,37 @@ class MyShipments(Resource):
         user_id = int(get_jwt_identity())
         return Shipment.query.options(selectinload(Shipment.service), selectinload(Shipment.parcels), selectinload(Shipment.events)).filter_by(user_id=user_id) \
                              .order_by(Shipment.created_at.desc()).all()
+
+
+@ship_ns.route('/page')
+class ShipmentPage(Resource):
+    @jwt_required()
+    def get(self):
+        from app.validation import pagination
+        from app.models.user import User
+        from sqlalchemy import func, case, or_
+        page, size = pagination()
+        uid = int(get_jwt_identity())
+        user = db.session.get(User, uid)
+        query = Shipment.query
+        if request.args.get('all') == '1':
+            if not user.is_admin:
+                ship_ns.abort(403, 'Admin privileges required')
+        else:
+            query = query.filter(Shipment.user_id == uid)
+        # Aggregate in SQL rather than downloading every shipment into the browser.
+        counts = query.with_entities(func.count(Shipment.id),
+            func.sum(case((Shipment.status == 'in_transit', 1), else_=0)),
+            func.sum(case((Shipment.status == 'delivered', 1), else_=0)),
+            func.sum(case((Shipment.status == 'pending', 1), else_=0))).one()
+        search = request.args.get('search', '').strip()[:100]
+        if search:
+            # Escape LIKE wildcards so user input is literal.
+            escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            query = query.filter(or_(Shipment.tracking_no.ilike(escaped + '%', escape='\\'),
+                Shipment.destination.ilike('%' + escaped + '%', escape='\\'),
+                Shipment.origin.ilike('%' + escaped + '%', escape='\\'), Shipment.status == search))
+        result = query.order_by(Shipment.created_at.desc(), Shipment.id.desc()).paginate(page=page, per_page=size, error_out=False)
+        return {'items': [shipment.to_dict() for shipment in result.items], 'total': result.total,
+                'page': page, 'pages': result.pages, 'per_page': size,
+                'summary': dict(zip(('total', 'in_transit', 'delivered', 'pending'), [int(value or 0) for value in counts]))}

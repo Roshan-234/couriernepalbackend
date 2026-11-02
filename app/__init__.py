@@ -10,6 +10,13 @@ def create_app(env='default'):
     app = Flask(__name__)
     app.config.from_object(config[env])
 
+    app.config['ENV_NAME'] = env
+    from .security import validate_production, install_security
+    if env == 'production':
+        validate_production(app.config)
+    install_security(app)
+    register_models()
+
     # Match routes with and without a trailing slash instead of issuing a 308
     # redirect. Behind the frontend's same-origin proxy, Flask's trailing-slash
     # redirect resolves to the backend's own origin and bounces the browser
@@ -49,13 +56,16 @@ def create_app(env='default'):
     app.after_request(audit_request)
 
     # Register standalone blueprints
+    from app.content.routes import content_bp
+    app.register_blueprint(content_bp, url_prefix='/api/content')
     app.register_blueprint(health_ns, url_prefix='/api')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
     with app.app_context():
         register_models()
-        db.create_all()
-        seed_roles()
+        if app.config['AUTO_CREATE_SCHEMA']:
+            db.create_all()
+            seed_roles()
 
     from app.cli import register_commands
     register_commands(app)

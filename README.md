@@ -1,59 +1,42 @@
-# Moonlight Freight backend
+# Moonlight Freight / Courier Nepal backend
 
-Flask API for the Next.js frontend. Browser traffic stays on the frontend origin, with Next.js forwarding /api/* to Flask. This preserves HttpOnly cookies and CSRF protection.
+Flask API serving the Next.js frontend for **couriernepal.com**. Browser calls pass through the frontend origin so authentication cookies and CSRF protection work consistently.
 
-## Local setup
+## Setup and deployment
+
+Follow [DEPLOYMENT.md](DEPLOYMENT.md) for the complete local and cPanel procedure.
 
 ```powershell
 python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt
-```
-
-Create an untracked .env with FLASK_ENV=development, FRONTEND_URL=http://localhost:3000, and independently generated SECRET_KEY and JWT_SECRET_KEY values:
-
-```powershell
-python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-Generate each secret separately. Development uses SQLite in instance/app.db.
-
-```powershell
+.venv/Scripts/python -m pip install -r requirements.txt pytest
+Copy-Item .env.local.example .env
+# Set independent random SECRET_KEY and JWT_SECRET_KEY values in .env.
+.venv/Scripts/python -m flask --app run create-admin
 .venv/Scripts/python -m flask --app run run --host 127.0.0.1 --port 5000
 ```
 
-Public registration always creates a customer. Bootstrap an administrator locally with the interactive command below (the password is hidden and validated):
+Development creates SQLite tables and starter content. Production requires MySQL, shared rate-limit storage, HTTPS, and three independent strong secrets. It uses explicit migrations and never creates tables or seeds data during worker startup. Public registration creates customers only.
 
-```powershell
-.venv/Scripts/python -m flask --app run create-admin
-```
+## Features
 
-Existing administrators retain their roles. This update changes session token claims: existing sign-ins must log in again after deployment. Access and refresh tokens now share a revocable session, so logout, session revocation, account suspension and password resets invalidate the appropriate tokens.
+- Validated shipment booking, tracking updates, paginated owner-scoped history and SQL dashboard totals.
+- Role-protected administration, pricing rules, account status and document ownership.
+- HttpOnly cookie login, CSRF, revocable sessions, profile updates and password reset.
+- Database-managed public pages and SEO fields with atomic version checks; protected article drafts and comment ownership.
+- Shared backend access key, response security headers, rate limits and audit logging.
+- Explicit schema migrations preserve legacy parcel tracking history and shipment totals. Repeatable content seeding preserves administrator edits.
 
 ## Verification
 
 ```powershell
-.venv/Scripts/python -m pip install pytest
 .venv/Scripts/python -m pytest -q --disable-warnings
+.venv/Scripts/python scripts/verify_migrations.py
 ```
 
-tests/test_frontend_contract.py verifies cookie login, CSRF enforcement, booking, listing, public tracking, profile updates, contact submission, role checks, refresh and logout. The expanded suite contains 65 tests covering the customer journey, permissions, refresh-token revocation, pricing brackets, document ownership, invoice totals, comments, and administrator bootstrap.
+The suite covers customer workflows, authorization, CSRF, session revocation, pricing, document ownership, CMS updates and production configuration. The migration verifier uses an empty disposable SQLite database by default; never point it at real application data. GitHub Actions also runs it against a disposable MySQL 8 service.
 
-## Deployment
+## Launch requirements
 
-Use .env.example for production MySQL and SMTP settings. Set FLASK_ENV=production and deploy behind HTTPS with a production WSGI server. Set FRONTEND_URL to the public frontend origin for password-reset links. Set Next.js BACKEND_URL to this service origin, without /api. Configure RATELIMIT_STORAGE_URI for shared rate limiting when running multiple workers.
+Back up existing databases and rehearse upgrades on a clone. Earlier unversioned schemas need a reviewed baseline; never blindly stamp a migration version. The tracking conversion is forward-only, with backup restoration as rollback. Review inherited sample prices, configure real rates, test SMTP, verify live carrier connections, and review starter editorial/privacy text before opening the site. No payment is collected by the booking flow.
 
-SMTP delivery, production MySQL and external carriers require real deployment configuration and were not tested locally. Configure pricing rules before expecting estimates. No payments are taken by the booking flow.
-
-The local preview database contains development-only QA accounts and shipments. Use a separate production database; do not deploy the preview SQLite database.
-
-## Functional fixes
-
-- Admin-only management for services, warehouses, agents, FAQ and blog publishing; protected drafts and comment ownership.
-- Validated shipment statuses, numeric fields, parcel weights and service references. No fabricated seven-day delivery estimate.
-- Pricing rules validate bounds and percentages, select the matching weight bracket, and support activation/deactivation.
-- MySQL-compatible delivery-time calculation; analytics return null expenses/profit because no expense ledger exists.
-- Invoice and packing-list links enforce ownership; item totals are derived on the server. openpyxl is declared for workbook exports.
-- Account status validation and protection against disabling your own account or editing a super-admin as an ordinary admin.
-- GitHub Actions run the backend test suite on pushes and pull requests.
-
-Live SMTP, carrier integrations and production MySQL still require deployment credentials and operational testing. The automated tests use isolated SQLite; they do not claim production MySQL verification.
+No system is hacker-proof. Keep dependencies, hosting protections, monitoring and tested backups current.

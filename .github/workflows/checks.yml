@@ -11,5 +11,31 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - run: pip install -r requirements.txt pytest
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt pytest pip-audit
+      - run: pip-audit -r requirements.txt
       - run: python -m pytest -q --disable-warnings
+      - run: python scripts/verify_migrations.py
+  mysql-migration:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci-test-only
+          MYSQL_DATABASE: migration_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -pci-test-only"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python scripts/verify_migrations.py
+        env:
+          TEST_MIGRATION_DATABASE_URL: mysql+pymysql://root:ci-test-only@127.0.0.1:3306/migration_test

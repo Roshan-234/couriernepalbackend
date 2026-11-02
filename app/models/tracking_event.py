@@ -4,7 +4,7 @@ from app.extensions import db
 class TrackingEvent(db.Model):
     __tablename__ = 'tracking_events'
     id           = db.Column(db.Integer, primary_key=True)
-    shipment_id  = db.Column(db.Integer, db.ForeignKey('shipments.id'), nullable=False)
+    shipment_id  = db.Column(db.Integer, db.ForeignKey('shipments.id'), nullable=False, index=True)
     status       = db.Column(db.String(100), nullable=False)
     location     = db.Column(db.String(255))
     description  = db.Column(db.Text)

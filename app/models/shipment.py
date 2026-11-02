@@ -4,6 +4,7 @@ from app.extensions import db
 
 class Shipment(db.Model):
     __tablename__ = 'shipments'
+    __table_args__ = (db.Index('ix_shipments_user_created_id', 'user_id', 'created_at', 'id'),)
 
     id                 = db.Column(db.Integer, primary_key=True)
     tracking_no        = db.Column(db.String(50), unique=True, nullable=False, index=True)

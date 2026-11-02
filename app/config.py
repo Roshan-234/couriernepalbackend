@@ -12,6 +12,11 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY")
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 
+    BACKEND_PROXY_SECRET = os.getenv('BACKEND_PROXY_SECRET', '')
+    TRUSTED_PROXY_HOPS = int(os.getenv('TRUSTED_PROXY_HOPS', '0'))
+    AUTO_CREATE_SCHEMA = os.getenv('AUTO_CREATE_SCHEMA', 'true').lower() == 'true'
+    RATELIMIT_DEFAULT = '300 per minute'
+
     #Mail Configuration
     MAIL_SERVER         = os.getenv("MAIL_SERVER")
     MAIL_PORT           = int(os.getenv("MAIL_PORT", 465))
@@ -22,7 +27,7 @@ class Config:
     MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER")
 
     # Use SQLite for development
-    SQLALCHEMY_DATABASE_URI = "sqlite:///app.db"
+    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///app.db")
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     RATELIMIT_STORAGE_URI = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
@@ -55,6 +60,7 @@ class DevelopmentConfig(Config):
 
 class ProductionConfig(Config):
     DEBUG = False
+    AUTO_CREATE_SCHEMA = False
     # Cookies must only travel over HTTPS in production.
     JWT_COOKIE_SECURE = True
 
@@ -83,6 +89,8 @@ class ProductionConfig(Config):
 
 class TestingConfig(Config):
     TESTING = True
+    AUTO_CREATE_SCHEMA = True
+    BACKEND_PROXY_SECRET = ""
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     JWT_SECRET_KEY = "test-secret"
     JWT_ACCESS_TOKEN_EXPIRES = False
