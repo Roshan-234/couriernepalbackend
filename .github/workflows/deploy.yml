@@ -1,66 +1,89 @@
 name: Deploy backend to cPanel
 
-# Ships the Flask app to the cPanel Python App, installs deps in its virtualenv,
-# runs DB migrations, and restarts Passenger.
-#
-# Repo SECRETS (Settings → Secrets and variables → Actions):
-#   SSH_HOST       cPanel host (e.g. server.himalayanhost.com)
-#   SSH_USER       cPanel username
-#   SSH_PORT       SSH port (HimalayanHost is often NOT 22)
-#   SSH_PRIVATE_KEY  deploy key (public half authorized in cPanel → SSH Access)
-#   BACKEND_PATH   app root, e.g. /home/USER/couriernepalbackend
-#   VENV_ACTIVATE  the exact "source .../activate" line cPanel's Python App shows
-
+# Explicit release action after configuring production and rehearsing migrations.
+# See DEPLOYMENT.md. A normal code push runs checks, not a database migration.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
-
+    inputs:
+      backup_confirmed:
+        description: 'I have a verified backup, rehearsed migrations and enabled maintenance'
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
 concurrency:
   group: deploy-backend
   cancel-in-progress: false
-
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main' && inputs.backup_confirmed
     runs-on: ubuntu-latest
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+      BACKEND_PATH: ${{ secrets.BACKEND_PATH }}
+      VENV_PATH: ${{ secrets.VENV_PATH }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure SSH
+      - name: Validate hosting configuration
+        shell: bash
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${{ secrets.SSH_PORT }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Deploy code
-        run: |
-          # Excluded paths (secrets, uploads, instance dir, server venv) are
-          # preserved on the server; --delete only prunes tracked app files.
-          rsync -az --delete \
-            --exclude='.env' \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='__pycache__/' \
-            --exclude='*.pyc' \
-            --exclude='instance/' \
-            --exclude='storage/' \
-            --exclude='tests/' \
-            --exclude='*.log' \
-            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SSH_PORT }}" \
-            ./ \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.BACKEND_PATH }}/"
-
-      - name: Install deps, migrate, restart
-        run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.SSH_PORT }}" \
-            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" bash -s <<'EOF'
           set -euo pipefail
-          ${{ secrets.VENV_ACTIVATE }}
-          cd "${{ secrets.BACKEND_PATH }}"
-          pip install -r requirements.txt
-          FLASK_APP=passenger_wsgi:application FLASK_ENV=production flask db upgrade
-          mkdir -p "${{ secrets.BACKEND_PATH }}/tmp"
-          touch "${{ secrets.BACKEND_PATH }}/tmp/restart.txt"
-          echo "backend migrated + restarted"
-          EOF
+          for name in SSH_HOST SSH_USER SSH_PORT SSH_PRIVATE_KEY SSH_KNOWN_HOSTS BACKEND_PATH VENV_PATH; do
+            if [ -z "${!name}" ]; then echo "Missing required secret: $name"; exit 1; fi
+          done
+          [[ "$SSH_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          [[ "$BACKEND_PATH" =~ ^/home/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_./-]+$ ]]
+          [[ "$VENV_PATH" =~ ^/home/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_./-]+/bin/activate$ ]]
+          [[ "$BACKEND_PATH" != *..* && "$VENV_PATH" != *..* ]]
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q --disable-warnings
+      - run: python scripts/verify_migrations.py
+      - name: Configure verified SSH host identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Copy application source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -az --exclude='.env*' --exclude='.git' --exclude='.github' \
+            --exclude='__pycache__/' --exclude='*.pyc' --exclude='instance/' \
+            --exclude='storage/' --exclude='tests/' --exclude='*.log' \
+            --exclude='.venv/' --exclude='venv/' --exclude='env/' \
+            -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/deploy_key -p $SSH_PORT" \
+            ./ "$SSH_USER@$SSH_HOST:$BACKEND_PATH/"
+      - name: Install, migrate, seed and restart
+        shell: bash
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/deploy_key -p "$SSH_PORT" \
+            "$SSH_USER@$SSH_HOST" bash -s -- "$BACKEND_PATH" "$VENV_PATH" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          source "$2"
+          export FLASK_ENV=production
+          python -m pip install -r requirements.txt
+          python -m flask --app passenger_wsgi:application db upgrade
+          python -m flask --app passenger_wsgi:application seed-content
+          python -m flask --app passenger_wsgi:application schema-check
+          mkdir -p tmp
+          touch tmp/restart.txt
+          REMOTE
+      - name: Remove temporary SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

@@ -134,6 +134,12 @@ Use cPanel's Restart button or Passenger's restart file for each app after chang
 
 Enable HSTS only after HTTPS works on `couriernepal.com`; the header intentionally does not include subdomains or preload. Request-specific CSP nonces require dynamic rendering. This trades static full-page caching for stronger script controls; keep `/_next/static` cacheable, but never cache authenticated API responses or HTML with per-request nonces in a CDN.
 
+### Optional GitHub deployment
+
+The backend's `Deploy backend to cPanel` workflow is now manual (`workflow_dispatch`), so pushing code cannot unexpectedly migrate a production database. Run it from `main` only after the checks pass, a clone rehearsal succeeds, a verified backup exists and maintenance is enabled. Configure a GitHub `production` environment with appropriate release protection.
+
+Required deployment secrets are `SSH_HOST`, `SSH_USER`, `SSH_PORT`, `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS`, `BACKEND_PATH`, and `VENV_PATH`. `SSH_KNOWN_HOSTS` must contain the server key verified independently with your hosting provider. `VENV_PATH` is the absolute path ending in `/bin/activate`, not a shell command (it replaces the previous `VENV_ACTIVATE` setting). Paths must be below `/home/USER/`. The workflow preserves environment files, runtime storage and virtual environments; it does not delete unknown remote files. Review any obsolete source files during a release. Deploy/restart the frontend separately using the steps above, then perform the release checks before leaving maintenance.
+
 ## 5. SEO and optional analytics
 
 The site includes DB-managed titles/descriptions, canonical URLs, Open Graph/Twitter metadata, organization JSON-LD, server-rendered public page/article text, `robots.txt`, and a DB-generated sitemap. Unpublished pages and drafts are excluded; account routes and shipment tracking are marked noindex. Sitemap article export currently supports up to 10,000 published articles; partition into sitemap files before exceeding that limit. No search ranking is guaranteed.
