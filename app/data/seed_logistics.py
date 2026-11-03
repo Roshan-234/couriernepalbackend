@@ -23,6 +23,76 @@ from app.data.nepal_geo import (
 )
 
 
+# ── Service catalogue ───────────────────────────────────────────────────────
+
+#: The services offered, international first because that is the core of the
+#: business: freight and courier out of Nepal, and inbound clearance into it.
+#: Domestic delivery is the feeder network underneath it, not the headline.
+#:
+#: These used to seed only when `current_app.testing` was true, so a real
+#: deployment ran with an empty services table and the booking form had
+#: nothing to offer. `flask seed-logistics` is an explicit operator action,
+#: which is the right place for them.
+#:
+#: code, name, delivery_time, price_range, description
+SERVICES = [
+    ("INTL_EXPRESS", "International Express", "3-5 business days", "From the calculator",
+     "Door-to-door express to major destinations, with customs documentation handled "
+     "for you and tracking the whole way."),
+    ("INTL_STANDARD", "International Standard", "7-10 business days", "From the calculator",
+     "Our most-used international service. Air freight on a scheduled lane, suited to "
+     "parcels that need to arrive reliably rather than urgently."),
+    ("INTL_ECONOMY", "International Economy", "14-21 business days", "From the calculator",
+     "The lowest air rate we offer, for shipments where cost matters more than speed."),
+    ("AIR_CARGO", "Air Freight", "5-7 business days", "Per kilogram",
+     "Consolidated and full air cargo out of Kathmandu for commercial volumes, priced "
+     "per kilogram on chargeable weight."),
+    ("SEA_CARGO", "Sea Freight", "25-45 business days", "Per cubic metre",
+     "LCL and FCL sea freight routed through Kolkata or Birgunj. Nepal is landlocked, "
+     "so every sea movement is multimodal - we arrange the whole chain."),
+    ("DOCS_EXPRESS", "Document Express", "2-4 business days", "From the calculator",
+     "Passports, certificates, contracts and academic transcripts, with signature on "
+     "delivery and a tracked chain of custody."),
+    ("EXCESS_BAGGAGE", "Excess Baggage", "7-14 business days", "Per kilogram",
+     "For students and workers flying out: send what will not fit in the airline "
+     "allowance, usually at a fraction of excess-baggage charges at the airport."),
+    ("RELOCATION", "Personal Effects & Relocation", "Varies by destination", "On survey",
+     "Household goods and personal effects for people moving country, including the "
+     "inventory and valuation paperwork customs will ask for."),
+    ("IMPORT_NEPAL", "Import to Nepal", "Varies by origin", "On enquiry",
+     "Inbound shipments into Nepal, including customs clearance, duty assessment and "
+     "final delivery to any of the 77 districts."),
+    ("ECOMMERCE_INTL", "Cross-border E-commerce", "7-14 business days", "Contract rates",
+     "Fulfilment for sellers shipping out of Nepal, with bulk booking, scheduled "
+     "pickup and consolidated manifests."),
+    ("DANGEROUS_GOODS", "Dangerous Goods", "7-10 business days", "On enquiry",
+     "IATA-regulated items handled by trained staff with the required declarations. "
+     "Talk to us before booking so we can confirm the route accepts them."),
+    ("PERISHABLES", "Perishables & Temperature Sensitive", "2-3 business days", "On enquiry",
+     "Time and temperature critical consignments moved on the shortest viable routing."),
+    ("DOMESTIC_EXPRESS", "Domestic Express", "Next day on highway routes", "From the calculator",
+     "Priority delivery inside Nepal, across the Kathmandu Valley and the highway cities."),
+    ("DOMESTIC_STANDARD", "Domestic Standard", "2-5 business days", "From the calculator",
+     "Everyday parcel delivery to all 77 districts, with cash on delivery available."),
+]
+
+
+def seed_services():
+    from app.models.service import Service
+
+    created = 0
+    for code, name, delivery_time, price_range, description in SERVICES:
+        if Service.query.filter_by(code=code).first():
+            continue
+        db.session.add(Service(
+            code=code, name=name, delivery_time=delivery_time,
+            price_range=price_range, description=description, is_active=True,
+        ))
+        created += 1
+    db.session.commit()
+    return created
+
+
 # ── Branch network ──────────────────────────────────────────────────────────
 
 #: code, name, type, district, city, address, phone, handles_international
@@ -441,6 +511,7 @@ def seed_sms_providers():
 def seed_all(verbose=True):
     """Run every seeder. Safe to call repeatedly."""
     steps = [
+        ("services", seed_services),
         ("branches", seed_branches),
         ("rate card entries", seed_rate_cards),
         ("surcharges", seed_surcharges),
