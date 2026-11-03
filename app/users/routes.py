@@ -20,7 +20,9 @@ user_out = user_ns.model("UserOut", {
     "first_name": fields.String(),
     "last_name":  fields.String(),
     "status":     fields.String(),
-    "roles":      fields.List(role_field)
+    "roles":      fields.List(role_field),
+    "must_change_password": fields.Boolean(),
+    "last_login_at": fields.String(),
 })
 
 user_in = user_ns.model("UserIn", {
@@ -41,7 +43,10 @@ class UserList(Resource):
 
     @user_ns.doc(security="Bearer")
     @user_ns.expect(user_in)
-    @user_ns.marshal_with(user_out, code=201)
+    # Deliberately unmarshalled: user_out does not declare
+    # `temporary_password`, so marshalling silently dropped the one piece of
+    # this response the administrator actually needs, leaving the new account
+    # unreachable.
     @require_roles("super_admin")
     def post(self):
         data = request.get_json()
@@ -63,6 +68,10 @@ class UserList(Resource):
             status=UserStatus(data.get("status", UserStatus.ACTIVE.value))
         )
         u.set_password(temp_pw)
+        # set_password clears this, so flag it afterwards: a password an
+        # administrator chose and read is not a secret only the user knows.
+        u.must_change_password = True
+        u.password_reset_expires = None
 
         # assign roles or default customer
         if data.get("roles"):
@@ -75,6 +84,11 @@ class UserList(Resource):
         db.session.add(u); db.session.commit()
         out = u.to_dict()
         out["temporary_password"] = temp_pw
+        out["notice"] = (
+            "Give this to the account holder over a channel they already "
+            "trust, and have them change it at first sign-in. It is shown "
+            "once and is not stored in clear."
+        )
         return out, 201
 
 @user_ns.route("/<int:id>")
@@ -99,6 +113,11 @@ class UserDetail(Resource):
         super_admin = any(role.name == 'super_admin' for role in caller.roles)
         if any(role.name == 'super_admin' for role in u.roles) and not super_admin:
             user_ns.abort(403, 'Only super_admin may edit administrator accounts')
+        # An admin could otherwise set a peer admin's email to one they
+        # control, trigger a password reset and own the account. Changing
+        # another administrator's address is a super_admin action.
+        if ('email' in data and u.id != caller.id and u.is_admin and not super_admin):
+            user_ns.abort(403, "Only super_admin may change another administrator's email")
         if set(data) - {'email', 'first_name', 'last_name', 'status', 'roles'}:
             user_ns.abort(400, 'Unknown user field')
         if 'roles' in data:
@@ -122,6 +141,14 @@ class UserDetail(Resource):
                 user_ns.abort(400, 'Invalid email address')
             if User.query.filter(User.email == data['email'], User.id != id).first():
                 user_ns.abort(409, 'Email already registered')
+        # Anything that changes who the account is, or what it may do, has to
+        # invalidate tokens already issued for it: an access token carries the
+        # old roles until it expires, and a stolen session should not survive
+        # the administrator disabling the account.
+        email_changed = 'email' in data and data['email'] != u.email
+        status_changed = 'status' in data and data['status'] != u.status.value
+        roles_changed = 'roles' in data and set(data['roles']) != {r.name for r in u.roles}
+
         u.email      = data.get("email", u.email)
         u.first_name = data.get("first_name", u.first_name)
         u.last_name  = data.get("last_name", u.last_name)
@@ -137,6 +164,17 @@ class UserDetail(Resource):
                     if r: u.roles.append(r)
             else:
                 user_ns.abort(403, "Only super_admin may update roles")
+
+        if email_changed or status_changed or roles_changed:
+            from app.models.user_session import UserSession
+            reason = ('email_changed' if email_changed
+                      else 'roles_changed' if roles_changed else 'status_changed')
+            UserSession.query.filter_by(user_id=u.id, is_revoked=False).update(
+                {"is_revoked": True, "revoked_reason": reason}, synchronize_session=False
+            )
+            # A pending reset would still be valid against the old address.
+            if email_changed:
+                u.clear_reset_token()
 
         db.session.commit()
         return u

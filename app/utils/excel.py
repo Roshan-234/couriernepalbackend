@@ -43,8 +43,26 @@ def _set_col_width(ws, col, width):
 def _merge(ws, r1, c1, r2, c2):
     ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
 
+# Spreadsheet software treats a cell opening with one of these as an
+# expression, so a customer who names themselves "=HYPERLINK(...)" would get
+# that evaluated on the admin's machine when they open the download.
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe(value):
+    """Neutralise a value that would otherwise be read as a formula.
+
+    Prefixing with an apostrophe is the conventional fix: Excel strips it and
+    shows the rest as text. Numbers, dates and the like are left untouched so
+    totals still calculate.
+    """
+    if isinstance(value, str) and value.startswith(_FORMULA_LEAD):
+        return "'" + value
+    return value
+
+
 def _cell(ws, row, col, value="", font=None, fill=None, align=None, border=None, number_format=None):
-    c = ws.cell(row=row, column=col, value=value)
+    c = ws.cell(row=row, column=col, value=_safe(value))
     if font:          c.font          = font
     if fill:          c.fill          = fill
     if align:         c.alignment     = align

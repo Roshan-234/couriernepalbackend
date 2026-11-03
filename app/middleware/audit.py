@@ -2,6 +2,8 @@ from datetime import datetime
 from flask import request, g
 from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 
+from app.net import client_ip
+
 # Paths to never log (to avoid infinite loops or noise)
 SKIP_PATHS = ["/api/docs", "/api/health", "/static", "/favicon", "/api/swagger", "/api/content/pages", "/api/content/page"]
 
@@ -57,6 +59,11 @@ def audit_request(response):
             return response
         if not path.startswith("/api"):
             return response
+        # Traffic the edge turned away never reached the application, and this
+        # hook runs before the rate limiter does. Logging it would let anyone
+        # who can reach the host grow this table without limit.
+        if getattr(g, 'rejected_at_edge', False):
+            return response
 
         # Priority: explicit user_id set by handler (e.g. login before token exists)
         user_id = getattr(g, 'audit_user_id', None)
@@ -86,7 +93,7 @@ def audit_request(response):
             action=action,
             resource=resource,
             resource_id=resource_id,
-            ip_address=request.remote_addr,
+            ip_address=client_ip(),
             user_agent=(request.user_agent.string or "")[:500] if request.user_agent else "",
             status_code=response.status_code,
             timestamp=datetime.utcnow(),

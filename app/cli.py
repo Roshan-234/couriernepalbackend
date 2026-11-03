@@ -13,6 +13,19 @@ def register_commands(app):
         seed_roles()
         click.echo('Roles and starter pages initialized; existing content preserved')
 
+    @app.cli.command('seed-logistics')
+    def seed_logistics_command():
+        """Create the starter branch network, tariff, carriers and templates.
+
+        Idempotent, and everything that touches a third party is seeded
+        inactive and without credentials.
+        """
+        from app.data.seed_logistics import seed_all
+        click.echo('Seeding logistics data...')
+        seed_all()
+        click.echo('Done. Carrier connectors and payment gateways are inactive '
+                   'until credentials are entered and each one is switched on.')
+
     @app.cli.command('schema-check')
     def schema_check():
         from sqlalchemy import inspect

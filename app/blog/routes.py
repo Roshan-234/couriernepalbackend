@@ -8,6 +8,7 @@ from sqlalchemy import desc, or_
 from flask import request
 from app.auth.utils import require_roles
 from app.models.user import User
+from app.validation import json_object, text
 
 blog_ns = Namespace('blog', description='Blog operations')
 
@@ -78,9 +79,117 @@ def _unique_slug(base: str, exclude_id: int | None = None) -> str:
 def _attach_tags(post: BlogPost, tag_ids: list[int]) -> None:
     post.tags = []
     for tid in tag_ids:
-        tag = BlogTag.query.get(tid)
+        tag = db.session.get(BlogTag, tid)
         if tag:
             post.tags.append(tag)
+
+
+# ── Writable field whitelist ────────────────────────────────────────────
+#
+# ``BlogPost(**payload)`` and a blind setattr loop accepted any attribute the
+# model happened to have. Dropping a hand-picked list of read-only keys is not
+# the same guarantee: anything not on that list — 'views', a relationship, a
+# typo — still reached the row or raised a 500. Every writable field is named
+# here, with the bound it is checked against.
+
+_POST_STRINGS = {'title': 200, 'content': 50000, 'excerpt': 500}
+
+_POST_WRITABLE = set(_POST_STRINGS) | {'featured_image', 'status', 'category_id', 'tag_ids'}
+
+#: Server-owned, derived or display-only keys. The editor PUTs back the record
+#: it just fetched, so these are dropped rather than refused — but never
+#: written. 'cover_image' is the read alias _post_to_dict adds.
+_POST_IGNORED = {'id', 'slug', 'views', 'author', 'author_id', 'category',
+                 'tags', 'cover_image', 'created_at', 'updated_at', 'published_at'}
+
+_POST_STATUSES = ('draft', 'published')
+
+#: An <img src> the frontend renders. A javascript: or data: URL here is stored
+#: XSS, so only absolute http(s) and site-relative paths are accepted.
+_IMAGE_PREFIXES = ('http://', 'https://', '/')
+
+
+def _featured_image(value):
+    if value in (None, ''):
+        return None
+    url = text(value, 'featured_image', 255)
+    if not url.startswith(_IMAGE_PREFIXES):
+        blog_ns.abort(400, "'featured_image' must be an http(s) or site-relative URL")
+    return url
+
+
+def _tag_ids(value):
+    if value is None:
+        return []
+    if (not isinstance(value, list) or len(value) > 50
+            or any(isinstance(t, bool) or not isinstance(t, int) for t in value)):
+        blog_ns.abort(400, "'tag_ids' must be a list of at most 50 integer tag ids")
+    return value
+
+
+def _clean_post(data):
+    """Validate a post payload and return only the fields a client may write."""
+    unknown = set(data) - _POST_WRITABLE - _POST_IGNORED
+    if unknown:
+        blog_ns.abort(400, f"Unknown field(s): {', '.join(sorted(unknown))}")
+
+    clean = {}
+    for field, limit in _POST_STRINGS.items():
+        if field in data:
+            value, required = data[field], field in ('title', 'content')
+            clean[field] = None if value is None and not required else text(value, field, limit, required)
+    if 'featured_image' in data:
+        clean['featured_image'] = _featured_image(data['featured_image'])
+    if 'status' in data:
+        if data['status'] not in _POST_STATUSES:
+            blog_ns.abort(400, f"'status' must be one of {', '.join(_POST_STATUSES)}")
+        clean['status'] = data['status']
+    if 'category_id' in data:
+        category_id = data['category_id']
+        if isinstance(category_id, bool) or not isinstance(category_id, int):
+            blog_ns.abort(400, "'category_id' must be an integer")
+        clean['category_id'] = category_id
+    return clean
+
+
+def _category_or_404(category_id):
+    category = db.session.get(BlogCategory, category_id)
+    if not category:
+        blog_ns.abort(404, f"Category {category_id} not found")
+    return category
+
+
+#: Categories and tags derive their slug server-side, so only the display
+#: fields are writable. Everything else is read-only or a relationship.
+_CATEGORY_STRINGS = {'name': 100, 'description': 2000}
+_CATEGORY_IGNORED = {'id', 'slug', 'created_at', 'posts', 'posts_count'}
+_TAG_STRINGS = {'name': 50}
+_TAG_IGNORED = {'id', 'slug', 'posts'}
+
+
+def _clean_named(data, strings, ignored):
+    """Validate a category or tag payload down to its writable fields."""
+    unknown = set(data) - set(strings) - ignored
+    if unknown:
+        blog_ns.abort(400, f"Unknown field(s): {', '.join(sorted(unknown))}")
+    clean = {}
+    for field, limit in strings.items():
+        if field in data:
+            value, required = data[field], field == 'name'
+            clean[field] = None if value is None and not required else text(value, field, limit, required)
+    return clean
+
+
+def _unique_taxonomy_slug(model, base, exclude_id=None):
+    slug, n = base, 1
+    while True:
+        query = model.query.filter_by(slug=slug)
+        if exclude_id:
+            query = query.filter(model.id != exclude_id)
+        if not query.first():
+            return slug
+        slug = f"{base}-{n}"
+        n += 1
 
 
 def _post_to_dict(post: BlogPost) -> dict:
@@ -98,11 +207,13 @@ def _post_to_dict(post: BlogPost) -> dict:
         'status':         post.status,
         'views':          post.views,
         'author_id':      post.author_id,
+        # The author block is public on every published post, so it carries a
+        # display name only. Exposing the editor's address here handed anyone
+        # scraping the blog a list of staff emails to phish.
         'author': {
             'id':       author.id,
-            'name':     f"{author.first_name} {author.last_name}".strip() if author else 'Unknown',
-            'username': author.email if author else '',
-            'email':    author.email if author else '',
+            'name':     f"{author.first_name} {author.last_name}".strip() or 'Moonlight Freight',
+            'username': f"{author.first_name} {author.last_name}".strip() or 'Moonlight Freight',
             'is_admin': True,
         } if author else None,
         'category_id': post.category_id,
@@ -192,28 +303,17 @@ class BlogPostList(Resource):
     @require_roles("admin", "super_admin")
     def post(self):
         """Create a new blog post."""
-        data = dict(request.get_json(force=True))
+        payload = json_object()
+        tag_ids = _tag_ids(payload.pop('tag_ids', None))
+        data = _clean_post(payload)
 
-        # Validate
-        if not data.get('title', '').strip():
-            blog_ns.abort(400, 'title is required')
-        if not data.get('content', '').strip():
-            blog_ns.abort(400, 'content is required')
-        if not data.get('category_id'):
-            blog_ns.abort(400, 'category_id is required')
-
-        category = BlogCategory.query.get(data['category_id'])
-        if not category:
-            blog_ns.abort(404, f"Category {data['category_id']} not found")
-
-        tag_ids = data.pop('tag_ids', []) or []
-        # Strip non-model keys
-        for k in ['tags', 'id', 'slug', 'views', 'created_at', 'updated_at',
-                   'published_at', 'author_id', 'author', 'category']:
-            data.pop(k, None)
+        for field in ('title', 'content', 'category_id'):
+            if field not in data:
+                blog_ns.abort(400, f'{field} is required')
+        _category_or_404(data['category_id'])
 
         data['author_id'] = int(get_jwt_identity())
-        data['slug']      = _unique_slug(slugify(data['title']))
+        data['slug']      = _unique_slug(slugify(data['title']) or 'post')
 
         if data.get('status') == 'published':
             data['published_at'] = datetime.now(timezone.utc)
@@ -250,18 +350,16 @@ class BlogPostItem(Resource):
 
     def _update(self, slug):
         post = BlogPost.query.filter_by(slug=slug).first_or_404()
-        data = dict(request.get_json(force=True))
+        payload = json_object()
+        tag_ids = _tag_ids(payload.pop('tag_ids')) if 'tag_ids' in payload else None
+        data = _clean_post(payload)
 
-        tag_ids = data.pop('tag_ids', None)
-        for k in ['tags', 'id', 'views', 'created_at', 'updated_at',
-                   'published_at', 'author_id', 'author', 'category']:
-            data.pop(k, None)
+        if 'category_id' in data:
+            _category_or_404(data['category_id'])
 
         # Regenerate slug only if title actually changed
-        if 'title' in data and data['title'].strip() != post.title:
-            data['slug'] = _unique_slug(slugify(data['title']), exclude_id=post.id)
-        else:
-            data.pop('slug', None)
+        if 'title' in data and data['title'] != post.title:
+            data['slug'] = _unique_slug(slugify(data['title']) or 'post', exclude_id=post.id)
 
         new_status = data.get('status', post.status)
         if new_status == 'published' and post.published_at is None:
@@ -297,18 +395,10 @@ class BlogCategoryList(Resource):
     @blog_ns.marshal_with(category_model, code=201)
     @require_roles("admin", "super_admin")
     def post(self):
-        data = dict(blog_ns.payload)
-        if not data.get('name', '').strip():
+        data = _clean_named(json_object(), _CATEGORY_STRINGS, _CATEGORY_IGNORED)
+        if not data.get('name'):
             blog_ns.abort(400, 'name is required')
-
-        base_slug = slugify(data['name'])
-        slug, n = base_slug, 1
-        while BlogCategory.query.filter_by(slug=slug).first():
-            slug = f"{base_slug}-{n}"; n += 1
-
-        for k in ['id', 'slug', 'created_at']:
-            data.pop(k, None)
-        data['slug'] = slug
+        data['slug'] = _unique_taxonomy_slug(BlogCategory, slugify(data['name']) or 'category')
 
         category = BlogCategory(**data)
         db.session.add(category)
@@ -329,8 +419,9 @@ class BlogCategoryItem(Resource):
     @require_roles("admin", "super_admin")
     def put(self, slug):
         category = BlogCategory.query.filter_by(slug=slug).first_or_404()
-        data = dict(blog_ns.payload)
-        data['slug'] = slugify(data['name'])
+        data = _clean_named(json_object(), _CATEGORY_STRINGS, _CATEGORY_IGNORED)
+        if data.get('name') and data['name'] != category.name:
+            data['slug'] = _unique_taxonomy_slug(BlogCategory, slugify(data['name']) or 'category', exclude_id=category.id)
         for key, value in data.items():
             setattr(category, key, value)
         db.session.commit()
@@ -358,18 +449,10 @@ class BlogTagList(Resource):
     @blog_ns.marshal_with(tag_model, code=201)
     @require_roles("admin", "super_admin")
     def post(self):
-        data = dict(blog_ns.payload)
-        if not data.get('name', '').strip():
+        data = _clean_named(json_object(), _TAG_STRINGS, _TAG_IGNORED)
+        if not data.get('name'):
             blog_ns.abort(400, 'name is required')
-
-        base_slug = slugify(data['name'])
-        slug, n = base_slug, 1
-        while BlogTag.query.filter_by(slug=slug).first():
-            slug = f"{base_slug}-{n}"; n += 1
-
-        for k in ['id', 'slug']:
-            data.pop(k, None)
-        data['slug'] = slug
+        data['slug'] = _unique_taxonomy_slug(BlogTag, slugify(data['name']) or 'tag')
 
         tag = BlogTag(**data)
         db.session.add(tag)

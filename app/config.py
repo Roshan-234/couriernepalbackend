@@ -55,6 +55,19 @@ class Config:
     # caught and returned as 500 JSON by RESTX.
     PROPAGATE_EXCEPTIONS = True
 
+    # Whether /auth/login and /auth/refresh also put the tokens in the JSON
+    # body. API clients and the test suite read them from there; a browser
+    # ignores them and uses the HttpOnly cookies. Leaving them in the body in
+    # production would undo that protection, because any XSS could call
+    # refresh and read the bearer token straight out of the response.
+    AUTH_TOKENS_IN_BODY = os.getenv('AUTH_TOKENS_IN_BODY', 'true').lower() == 'true'
+
+    # Secrets stored in the database (carrier and gateway credentials) are
+    # encrypted with this. Unset, app/crypto.py derives one from SECRET_KEY,
+    # which is fine for development but ties them to the session secret.
+    FIELD_ENCRYPTION_KEY = os.getenv('FIELD_ENCRYPTION_KEY')
+    FIELD_ENCRYPTION_KEYS = os.getenv('FIELD_ENCRYPTION_KEYS')
+
 class DevelopmentConfig(Config):
     DEBUG = True
 
@@ -63,6 +76,9 @@ class ProductionConfig(Config):
     AUTO_CREATE_SCHEMA = False
     # Cookies must only travel over HTTPS in production.
     JWT_COOKIE_SECURE = True
+    # The browser is the only production client, and it reads cookies. Keeping
+    # the token out of the body is what makes HttpOnly worth having.
+    AUTH_TOKENS_IN_BODY = os.getenv('AUTH_TOKENS_IN_BODY', 'false').lower() == 'true'
 
     # Shared-MySQL connection hygiene. Each Passenger worker keeps its own pool,
     # so keep pools SMALL to stay under the host's per-user connection cap, and

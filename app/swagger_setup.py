@@ -22,6 +22,20 @@ from app.audit.routes import audit_ns
 from app.sessions.routes import sessions_ns
 from app.packing_lists.routes import pl_ns
 from app.invoices.routes import inv_ns
+# Logistics operations
+from app.branches.routes import branch_ns
+from app.riders.routes import rider_ns
+from app.pickups.routes import pickup_ns
+from app.deliveries.routes import delivery_ns
+from app.cod.routes import cod_ns
+from app.payments.routes import payment_ns
+from app.rates.routes import rate_ns
+from app.carriers.routes import carrier_ns
+from app.merchant.routes import merchant_ns
+from app.webhooks.routes import webhook_ns
+from app.notifications.routes import notification_ns
+from app.claims.routes import claim_ns
+from app.geo.routes import geo_ns
 
 def init_swagger(app):
     """Initialize Swagger documentation."""
@@ -42,6 +56,19 @@ def init_swagger(app):
     api.add_namespace(sessions_ns, path='/api/sessions')
     api.add_namespace(pl_ns, path='/api/packing-lists')
     api.add_namespace(inv_ns, path='/api/invoices')
+    api.add_namespace(branch_ns, path='/api/branches')
+    api.add_namespace(rider_ns, path='/api/riders')
+    api.add_namespace(pickup_ns, path='/api/pickups')
+    api.add_namespace(delivery_ns, path='/api/deliveries')
+    api.add_namespace(cod_ns, path='/api/cod')
+    api.add_namespace(payment_ns, path='/api/payments')
+    api.add_namespace(rate_ns, path='/api/rates')
+    api.add_namespace(carrier_ns, path='/api/carriers')
+    api.add_namespace(merchant_ns, path='/api/merchant')
+    api.add_namespace(webhook_ns, path='/api/webhooks')
+    api.add_namespace(notification_ns, path='/api/notifications')
+    api.add_namespace(claim_ns, path='/api/claims')
+    api.add_namespace(geo_ns, path='/api/geo')
 
     # Register all Swagger definitions
     register_swagger_definitions()

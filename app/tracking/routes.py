@@ -59,16 +59,36 @@ class TrackingEventList(Resource):
     @tracking_ns.expect(add_event_model)
     @tracking_ns.marshal_with(tracking_event_model, code=201)
     def post(self, tracking_no):
-        """Add a tracking event to a shipment (agent/admin only)"""
+        """Add a tracking event to a shipment (assigned rider, or admin)"""
+        from flask_jwt_extended import get_jwt_identity
+        from app.shipment_status import AGENT_STATUSES, can_transition, label
+        from app.shipments.routes import _is_admin, _rider_for
+
         shipment = Shipment.query.filter_by(tracking_no=tracking_no).first_or_404()
         data = tracking_update(json_object())
+        target = data['status']
+
+        user_id = int(get_jwt_identity())
+        if not _is_admin(user_id):
+            # Role alone used to be enough here, so any delivery agent could
+            # mark a stranger's parcel delivered or cancelled.
+            rider = _rider_for(user_id)
+            if not rider or shipment.rider_id != rider.id:
+                tracking_ns.abort(403, 'This shipment is not assigned to you')
+            if target not in AGENT_STATUSES:
+                tracking_ns.abort(403, 'That status may only be set by operations')
+
+        if not can_transition(shipment.status, target):
+            tracking_ns.abort(409, f"Cannot move a shipment from "
+                                   f"'{label(shipment.status)}' to '{label(target)}'")
+
         event = TrackingEvent(
             shipment_id=shipment.id,
-            status=data['status'],
+            status=target,
             location=data.get('location', ''),
             description=data.get('description', ''),
         )
-        shipment.status = data['status']
+        shipment.status = target
         db.session.add(event)
         db.session.commit()
         return event, 201

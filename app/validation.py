@@ -33,7 +33,9 @@ def pagination():
     return page, size
 
 
-SHIPMENT_STATUSES = ('pending', 'picked_up', 'in_transit', 'out_for_delivery', 'delivered', 'cancelled', 'returned')
+#: Sourced from the state machine so the vocabulary cannot drift. The legacy
+#: seven are a subset, so existing clients keep working.
+from app.shipment_status import STATUSES as SHIPMENT_STATUSES  # noqa: E402
 
 
 def tracking_update(data):
@@ -73,6 +75,61 @@ def shipment_data(data):
         if number(parcel.get('weight_kg'), 'Parcel weight') <= 0:
             raise BadRequest('Parcel weight must be positive')
         parcel['description'] = text(parcel.get('description', ''), 'Parcel description', 1000)
+    return logistics_fields(data)
+
+
+#: Writable logistics fields, with the check each one gets. Booking has to
+#: accept these or a COD parcel cannot be created at all; everything priced
+#: (freight, tax, totals) is deliberately absent, because the server computes
+#: it and a client must not be able to set its own charge.
+SERVICE_LEVELS = ('express', 'standard', 'economy', 'same_day')
+PAYMENT_MODES = ('prepaid', 'cod', 'credit')
+
+
+def logistics_fields(data):
+    """Validate the operational fields added with the logistics modules."""
+    from app.data.nepal_geo import district as find_district
+
+    for key in ('origin_district', 'destination_district'):
+        value = data.get(key)
+        if value in (None, ''):
+            data.pop(key, None)
+            continue
+        found = find_district(text(value, key, 60, required=True))
+        if not found:
+            raise BadRequest(f'{key} must be one of the 77 districts of Nepal')
+        # Store the canonical name so rate lanes and reports group correctly.
+        data[key] = found['name']
+
+    if data.get('service_level') is not None:
+        if data['service_level'] not in SERVICE_LEVELS:
+            raise BadRequest(f"service_level must be one of {', '.join(SERVICE_LEVELS)}")
+
+    if data.get('payment_mode') is not None:
+        if data['payment_mode'] not in PAYMENT_MODES:
+            raise BadRequest(f"payment_mode must be one of {', '.join(PAYMENT_MODES)}")
+
+    for key in ('length_cm', 'width_cm', 'height_cm', 'insurance_amount', 'cod_amount'):
+        if data.get(key) is not None:
+            number(data[key], key)
+
+    for key in ('is_cod', 'is_fragile', 'is_insured'):
+        if key in data and not isinstance(data[key], bool):
+            raise BadRequest(f'{key} must be true or false')
+
+    for key, limit in (('reference_no', 100), ('contents_description', 2000),
+                       ('cod_currency', 10)):
+        if data.get(key) is not None:
+            data[key] = text(data[key], key, limit)
+
+    for key in ('origin_branch_id', 'destination_branch_id'):
+        if data.get(key) is not None and type(data[key]) is not int:
+            raise BadRequest(f'{key} must be an integer')
+
+    # A COD parcel with no amount is a collection the rider cannot make.
+    if data.get('is_cod') and not data.get('cod_amount'):
+        raise BadRequest('A cash-on-delivery shipment needs a cod_amount')
+
     return data
 
 

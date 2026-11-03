@@ -21,6 +21,19 @@ def register_models():
     from .user_session import UserSession
     from .packing_list import PackingList
     from .invoice import Invoice
+    # Logistics operations
+    from .branch import Branch
+    from .rider import Rider
+    from .pickup import Pickup
+    from .delivery import DeliveryAttempt, ProofOfDelivery
+    from .cod import CodCollection, CodRemittance
+    from .payment import Payment, PaymentGateway
+    from .rate_card import RateCard, RateCardEntry, Surcharge
+    from .carrier import CarrierConnector
+    from .api_key import MerchantApiKey
+    from .webhook import WebhookEndpoint, WebhookDelivery
+    from .notification_template import NotificationTemplate, SmsProvider
+    from .claim import Claim, AddressBookEntry
 
 def seed_roles():
     """Ensure default roles, services, and FAQs exist in the database."""
@@ -29,6 +42,12 @@ def seed_roles():
         ("admin", "Operations administrator"),
         ("customer",    "Regular customer"),
         ("agent",       "Delivery agent"),
+        # Added with the logistics modules. 'agent' predates them and is kept
+        # so existing accounts and role checks keep working.
+        ("rider",          "Last-mile delivery rider"),
+        ("branch_manager", "Branch or hub manager"),
+        ("merchant",       "Business shipper with API access"),
+        ("finance",        "Finance and COD remittance"),
     ]
     for name, desc in defaults:
         if not Role.query.filter_by(name=name).first():

@@ -52,21 +52,55 @@ token_model = auth_ns.model("TokenResponse", {
     }))
 })
 
+#: A bcrypt hash to compare against when the email is unknown. Without it an
+#: unknown address returns measurably faster than a known one, which is a
+#: free account-enumeration oracle. Built once, lazily.
+_DECOY_HASH = None
+
+
+def _decoy_hash():
+    global _DECOY_HASH
+    if _DECOY_HASH is None:
+        from app.extensions import bcrypt
+        _DECOY_HASH = bcrypt.generate_password_hash("decoy-for-timing").decode("utf-8")
+    return _DECOY_HASH
+
+
+def _burn_password_time(password):
+    """Spend the same work on an unknown account as on a real one."""
+    from app.extensions import bcrypt
+    try:
+        bcrypt.check_password_hash(_decoy_hash(), password or "")
+    except (ValueError, TypeError):
+        pass
+
+
 def _track_session(user_id, access_token, refresh_token):
     """Persist a revocable UserSession row for a freshly issued access token."""
     from app.models.user_session import UserSession
-    from datetime import timedelta
+    from app.net import client_ip
     claims = decode_token(refresh_token)
-    jti = decode_token(access_token)["sid"]
     session = UserSession(
         user_id=user_id,
-        jti=jti,
-        ip_address=request.remote_addr,
+        jti=decode_token(access_token)["sid"],
+        refresh_jti=claims.get("jti"),
+        ip_address=client_ip(),
         user_agent=(request.user_agent.string or "")[:500] if request.user_agent else "",
         expires_at=datetime.utcfromtimestamp(claims["exp"]) if claims.get("exp") else None,
     )
     db.session.add(session)
     db.session.commit()
+    return session
+
+
+def _auth_body(payload, access=None, refresh=None):
+    """Attach tokens to the body only where the deployment wants them there."""
+    if current_app.config.get("AUTH_TOKENS_IN_BODY", True):
+        if access is not None:
+            payload["access_token"] = access
+        if refresh is not None:
+            payload["refresh_token"] = refresh
+    return payload
 
 
 @auth_ns.route("/register")
@@ -122,12 +156,42 @@ class Login(Resource):
     @auth_ns.doc(model=token_model)
     @limiter.limit("10/minute")
     def post(self):
-        data = request.get_json()
-        user = User.query.filter_by(email=data["email"].strip().lower()).first()
-        if not user or not user.check_password(data["password"]):
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return {"msg": "A JSON object is required"}, 400
+        email = data.get("email")
+        password = data.get("password")
+        if not isinstance(email, str) or not isinstance(password, str):
+            return {"msg": "Email and password are required"}, 400
+
+        user = User.query.filter_by(email=email.strip().lower()).first()
+
+        # One message and one amount of work for every failure, so neither the
+        # wording nor the timing says whether the address exists.
+        if not user:
+            _burn_password_time(password)
             auth_ns.abort(401, "Bad credentials")
+
+        if user.is_locked:
+            # Deliberately the same 401 as a wrong password: telling an
+            # attacker they have locked an account confirms it exists.
+            _burn_password_time(password)
+            auth_ns.abort(401, "Bad credentials")
+
+        if not user.check_password(password):
+            locked = user.record_failed_login()
+            db.session.commit()
+            if locked:
+                current_app.logger.warning(
+                    "Account %s locked after repeated failed sign-ins", user.id
+                )
+            auth_ns.abort(401, "Bad credentials")
+
         if user.status != UserStatus.ACTIVE:
             auth_ns.abort(403, "Account not active")
+
+        user.record_successful_login()
+        db.session.commit()
 
         roles = [r.name for r in user.roles]
         sid = uuid.uuid4().hex
@@ -138,12 +202,13 @@ class Login(Resource):
         # Let the audit middleware capture this user's id (no JWT on the login request itself)
         g.audit_user_id = user.id
 
-        # Tokens are returned in the body for API/test clients AND set as
-        # HttpOnly cookies for the browser (which ignores the body tokens).
-        resp = make_response(
-            {"access_token": access, "refresh_token": refresh, "user": user.to_dict()},
-            200,
+        # Cookies are what the browser uses. Whether the tokens also appear in
+        # the body is a deployment choice: see AUTH_TOKENS_IN_BODY.
+        body = _auth_body(
+            {"user": user.to_dict(), "must_change_password": user.must_change_password},
+            access, refresh,
         )
+        resp = make_response(body, 200)
         set_access_cookies(resp, access)
         set_refresh_cookies(resp, refresh)
         return resp
@@ -152,16 +217,53 @@ class Login(Resource):
 class Refresh(Resource):
     @jwt_required(refresh=True)
     def post(self):
+        """Exchange a refresh token for a new pair, rotating the refresh token.
+
+        Rotation is what makes a stolen refresh cookie detectable. Each one is
+        valid exactly once: presenting a superseded token means two parties
+        hold it, so the session is revoked rather than renewed and the real
+        user is signed out — visibly — instead of sharing their account.
+        """
+        from flask_jwt_extended import get_jwt
+        from app.models.user_session import UserSession
+
+        claims = get_jwt()
         uid = get_jwt_identity()
-        user = User.query.get(int(uid))
+        user = db.session.get(User, int(uid))
         if not user or user.status != UserStatus.ACTIVE:
             return {"msg": "Account not active"}, 401
-        roles = [r.name for r in user.roles] if user else []
-        from flask_jwt_extended import get_jwt
-        access = create_access_token(identity=str(uid), additional_claims={"roles": roles, "sid": get_jwt()["sid"]})
 
-        resp = make_response({"access_token": access}, 200)
+        session = UserSession.query.filter_by(jti=claims.get("sid"), user_id=user.id).first()
+        if not session or session.is_revoked:
+            return {"msg": "Session is no longer valid"}, 401
+
+        presented = claims.get("jti")
+        if session.refresh_jti and presented != session.refresh_jti:
+            # This token was already exchanged. Either it was replayed by
+            # someone who copied it, or the legitimate client raced itself;
+            # both are answered by ending the session.
+            session.revoke(reason="refresh_reuse")
+            db.session.commit()
+            current_app.logger.warning(
+                "Refresh token reuse on session %s for user %s", session.id, user.id
+            )
+            resp = make_response({"msg": "Session ended for your security. Please sign in again."}, 401)
+            unset_jwt_cookies(resp)
+            return resp
+
+        roles = [r.name for r in user.roles]
+        sid = claims["sid"]
+        access = create_access_token(identity=str(uid), additional_claims={"roles": roles, "sid": sid})
+        refresh = create_refresh_token(identity=str(uid), additional_claims={"sid": sid})
+
+        session.refresh_jti = decode_token(refresh).get("jti")
+        session.rotated_at = datetime.utcnow()
+        session.last_active = datetime.utcnow()
+        db.session.commit()
+
+        resp = make_response(_auth_body({"msg": "Refreshed"}, access, refresh), 200)
         set_access_cookies(resp, access)
+        set_refresh_cookies(resp, refresh)
         return resp
 
 @auth_ns.route("/profile")
@@ -206,7 +308,6 @@ class PasswordResetRequest(Resource):
         if user:
             try:
                 token = user.generate_reset_token()
-                # Use environment or fallback
                 frontend_url = current_app.config["FRONTEND_URL"]
                 reset_url = f"{frontend_url}/auth/reset-password?token={token}"
 
@@ -221,16 +322,22 @@ class PasswordResetRequest(Resource):
                     )
                 )
                 mail.send(msg)
-                current_app.logger.info(f"Password reset email sent to {user.email}")
-            except Exception as e:
-                logging.exception("Failed to send reset email")
-                return {"msg": "Internal error while sending email."}, 500
+                # The address is not logged: these logs are shipped off the
+                # host and a reset request is a fact about a named customer.
+                current_app.logger.info("Password reset email sent for user %s", user.id)
+            except Exception:
+                # Swallowed deliberately. Returning 500 only for addresses that
+                # exist, while unknown ones return 200, tells an attacker which
+                # is which. The failure is logged for operators instead.
+                logging.exception("Failed to send reset email for user %s", user.id)
 
-        return {"msg": "Reset link will be sent to your mail address."}, 200
+        # One answer, whether or not the address is on file.
+        return {"msg": "If that address is registered, a reset link is on its way."}, 200
 
 @auth_ns.route("/password-reset/confirm")
 class PasswordResetConfirm(Resource):
     @auth_ns.expect(reset_confirm_model)
+    @limiter.limit("10/hour")
     def post(self):
         """Verify token and reset password."""
         data = request.get_json()
@@ -239,22 +346,27 @@ class PasswordResetConfirm(Resource):
         except ValidationError as err:
             return {"msg": "Validation error", "errors": err.messages}, 400
 
-        user = User.query.filter_by(password_reset_token=valid["token"]).first()
-
+        # Looked up by digest: the clear token is never stored, so a database
+        # reader cannot take over an account with a reset in flight.
+        user = User.by_reset_token(valid["token"])
         if not user:
-            return {"msg": "Invalid token"}, 400
-
-        if not user.password_reset_expires or user.password_reset_expires < datetime.utcnow():
-            return {"msg": "Token has expired"}, 400
+            # Expired and unknown answer alike, so the response says nothing
+            # about whether a token ever existed.
+            return {"msg": "That reset link is invalid or has expired."}, 400
 
         errors = validate_password_strength(valid["password"])
         if errors:
             return {"msg": "Weak password", "errors": errors}, 400
+
         from app.models.user_session import UserSession
-        UserSession.query.filter_by(user_id=user.id).update({"is_revoked": True})
+        UserSession.query.filter_by(user_id=user.id, is_revoked=False).update(
+            {"is_revoked": True, "revoked_reason": "password_reset"}
+        )
         user.set_password(valid["password"])
-        user.password_reset_token = None
-        user.password_reset_expires = None
+        user.clear_reset_token()
+        # A reset is also the way out of a lockout.
+        user.failed_login_count = 0
+        user.locked_until = None
         db.session.commit()
 
         return {"msg": "Your password has been reset successfully."}, 200
@@ -271,8 +383,56 @@ class Logout(Resource):
         if jti:
             sess = UserSession.query.filter_by(jti=jti).first()
             if sess:
-                sess.is_revoked = True
+                sess.revoke(reason="logout")
                 db.session.commit()
         resp = make_response({"msg": "Logged out successfully"}, 200)
         unset_jwt_cookies(resp)
         return resp
+
+
+@auth_ns.route("/password")
+class ChangePassword(Resource):
+    @auth_ns.doc(security="Bearer")
+    @jwt_required()
+    @limiter.limit("10/hour")
+    def post(self):
+        """Change your own password.
+
+        Until now the only route to a new password was the reset email, which
+        meant a user who simply wanted to rotate theirs had to pretend to have
+        forgotten it. Changing it signs out every other session, because the
+        usual reason to change a password is that someone else may have it.
+        """
+        from flask_jwt_extended import get_jwt
+        from app.models.user_session import UserSession
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return {"msg": "A JSON object is required"}, 400
+        current = data.get("current_password")
+        replacement = data.get("new_password")
+        if not isinstance(current, str) or not isinstance(replacement, str):
+            return {"msg": "Current and new password are required"}, 400
+
+        user = db.session.get(User, int(get_jwt_identity()))
+        if not user:
+            return {"msg": "User not found"}, 404
+        if not user.check_password(current):
+            return {"msg": "Your current password is not correct"}, 400
+        if current == replacement:
+            return {"msg": "Choose a password you have not used here before"}, 400
+
+        errors = validate_password_strength(replacement)
+        if errors:
+            return {"msg": "Weak password", "errors": errors}, 400
+
+        keep = get_jwt().get("sid")
+        revoked = UserSession.query.filter(
+            UserSession.user_id == user.id,
+            UserSession.is_revoked.is_(False),
+            UserSession.jti != keep,
+        ).update({"is_revoked": True, "revoked_reason": "password_change"},
+                 synchronize_session=False)
+        user.set_password(replacement)
+        db.session.commit()
+        return {"msg": "Password changed", "other_sessions_signed_out": int(revoked or 0)}, 200

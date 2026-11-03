@@ -74,11 +74,20 @@ def test_backend_key_gate_and_cache_policy(app):
 
 def production_config():
     return dict(SECRET_KEY='a'*64, JWT_SECRET_KEY='b'*64, BACKEND_PROXY_SECRET='c'*64,
-                SQLALCHEMY_DATABASE_URI='mysql+pymysql://local-test/db', FRONTEND_URL='https://couriernepal.com', RATELIMIT_STORAGE_URI='redis://localhost/0')
+                SQLALCHEMY_DATABASE_URI='mysql+pymysql://local-test/db', FRONTEND_URL='https://couriernepal.com',
+                RATELIMIT_STORAGE_URI='redis://localhost/0',
+                # Without a trusted proxy hop the API sees the frontend's
+                # address on every request, so rate limits collapse into one
+                # shared bucket and the audit log records the wrong source.
+                TRUSTED_PROXY_HOPS=1,
+                # Database-held credentials must not depend on SECRET_KEY, or
+                # rotating the session secret makes them unreadable.
+                FIELD_ENCRYPTION_KEY='d'*44)
 
 
 @pytest.mark.parametrize('key,value', [('SECRET_KEY', 'change-me'), ('JWT_SECRET_KEY', ''), ('BACKEND_PROXY_SECRET', 'short'),
-    ('SQLALCHEMY_DATABASE_URI', 'sqlite:///app.db'), ('FRONTEND_URL', 'http://couriernepal.com'), ('RATELIMIT_STORAGE_URI', 'memory://')])
+    ('SQLALCHEMY_DATABASE_URI', 'sqlite:///app.db'), ('FRONTEND_URL', 'http://couriernepal.com'), ('RATELIMIT_STORAGE_URI', 'memory://'),
+    ('TRUSTED_PROXY_HOPS', 0), ('FIELD_ENCRYPTION_KEY', '')])
 def test_unsafe_production_settings_fail_fast(key, value):
     config = production_config()
     config[key] = value
