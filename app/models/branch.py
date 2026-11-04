@@ -49,6 +49,21 @@ class Branch(db.Model):
     handles_international = db.Column(db.Boolean, default=False)
 
     is_active       = db.Column(db.Boolean, default=True, index=True)
+
+    #: Whether this branch appears on the public website.
+    #:
+    #: Separate from `is_active`, and defaulting to False, because the two
+    #: answer different questions. `is_active` means operations can route
+    #: through here. `is_published` means we are willing to tell the public
+    #: that this branch exists and print its address and telephone number.
+    #:
+    #: The starter network was seeded with plausible addresses and phone
+    #: numbers ending `000000`, which is fine as routing scaffolding and
+    #: indefensible on an indexed page: it tells a customer there is a
+    #: counter in Surkhet they can walk into and a number they can ring.
+    #: A branch is published once somebody has confirmed its details.
+    is_published    = db.Column(db.Boolean, default=False, index=True)
+
     created_at      = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -93,6 +108,7 @@ class Branch(db.Model):
             "handles_cod": self.handles_cod,
             "handles_international": self.handles_international,
             "is_active": self.is_active,
+            "is_published": self.is_published,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

@@ -29,6 +29,8 @@ branch_in = branch_ns.model('BranchIn', {
     'serves_districts': fields.List(fields.String()),
     'parent_branch_id': fields.Integer(),
     'accepts_walk_in':  fields.Boolean(),
+    'is_published':     fields.Boolean(
+        description='Show this branch on the public website. Off until its address and telephone number have been confirmed.'),
     'handles_cod':      fields.Boolean(),
     'handles_international': fields.Boolean(),
 })
@@ -39,7 +41,8 @@ _TEXT_FIELDS = {
     'postal_code': 20, 'phone': 50, 'alternate_phone': 50, 'email': 200,
     'manager_name': 150, 'opening_hours': 255,
 }
-_FLAG_FIELDS = ('accepts_walk_in', 'handles_cod', 'handles_international')
+_FLAG_FIELDS = ('accepts_walk_in', 'handles_cod', 'handles_international',
+                'is_published')
 _COORD_FIELDS = ('latitude', 'longitude')
 
 
@@ -113,14 +116,49 @@ def _lookup(ident):
     return branch
 
 
+
+def _caller_is_admin():
+    """True for a signed-in administrator, False for anonymous callers.
+
+    Deliberately tolerant: no token, an expired one or a malformed one all
+    mean "treat this as the public", which is the safe direction for a
+    listing that decides what the world can see.
+    """
+    from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+    from app.extensions import db as _db
+    from app.models.user import User
+    try:
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+        if not identity:
+            return False
+        user = _db.session.get(User, int(identity))
+        return bool(user and user.is_admin)
+    except Exception:
+        return False
+
+
 @branch_ns.route('/')
 class BranchList(Resource):
     @branch_ns.doc('list_branches')
     @branch_ns.param('district', 'Filter by district')
     @branch_ns.param('type', 'Filter by branch type')
     def get(self):
-        """List active branches (public)."""
+        """List branches.
+
+        Anonymous callers — which includes the public `/branches` page and
+        every search engine — see only the branches somebody has confirmed
+        and published. An administrator sees the whole network, because the
+        unpublished ones are still real routing destinations.
+
+        The distinction exists because the starter network was seeded with
+        invented addresses and `000000` phone numbers. Listing those
+        publicly tells a customer there is a counter to walk into and a
+        number to ring.
+        """
         query = Branch.query.filter_by(is_active=True)
+        if not _caller_is_admin():
+            query = query.filter(Branch.is_published.is_(True))
         if request.args.get('district'):
             found = nepal_geo.district(request.args['district'])
             query = query.filter(Branch.district == (found['name'] if found else request.args['district']))

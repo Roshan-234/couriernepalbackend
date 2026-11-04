@@ -34,6 +34,20 @@ def register_commands(app):
         click.echo('Done. Carrier connectors and payment gateways are inactive '
                    'until credentials are entered and each one is switched on.')
 
+    @app.cli.command('seed-faqs')
+    def seed_faqs_command():
+        """Publish the FAQ set.
+
+        The table was empty on every real deployment: the old defaults were
+        only inserted when `current_app.testing`, the same trap the service
+        catalogue fell into. Idempotent, and it never rewords an answer an
+        administrator has already edited.
+        """
+        from app.content.faqs import seed_faqs
+        result = seed_faqs()
+        click.echo(f"FAQs: {result['created']} created, "
+                   f"{result['total']} in the published set.")
+
     @app.cli.command('seed-privacy-pages')
     @click.option('--force', is_flag=True,
                   help='Replace the pages even where an administrator has edited them')

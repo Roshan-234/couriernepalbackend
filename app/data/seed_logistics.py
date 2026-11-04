@@ -150,6 +150,13 @@ def seed_branches():
             handles_international=intl,
             serves_districts=[district],
             is_active=True,
+            # Only the head office is published. Its address and number are
+            # the company's own and appear on the contact page already.
+            # Every other branch here was seeded with a plausible address
+            # and a `000000` phone number: useful as routing scaffolding,
+            # indefensible on a public page. Confirm the details, then
+            # publish it from the admin console.
+            is_published=(code == "KTM-HQ"),
         ))
         created += 1
     db.session.commit()
