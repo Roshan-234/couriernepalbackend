@@ -27,15 +27,6 @@ from app.models.user import User, UserStatus
 from app.models.user_session import UserSession
 from tests.conftest import auth_header, register_and_login
 
-# Registered here because app/swagger_setup.py is owned centrally and is not
-# ours to edit; the guard makes this a no-op once that import lands there.
-import app.swagger_setup as _swagger_setup
-from app.extensions import api as _api
-from app.privacy_requests.routes import privacy_ns  # noqa: E402
-
-if not hasattr(_swagger_setup, "privacy_ns"):
-    _api.add_namespace(privacy_ns, path="/api/privacy")
-
 
 # ── Fixtures and helpers ─────────────────────────────────────────────────────
 

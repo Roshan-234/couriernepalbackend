@@ -30,20 +30,7 @@ import pytest
 from app.extensions import db, mail
 from app.models.marketing import EmailCampaign, EmailSend, MarketingContact
 from tests.conftest import auth_header
-
-# The namespace is wired up centrally in app/swagger_setup.py, which is not
-# ours to edit. Until that line lands the routes do not exist, so register it
-# here; the guard makes this a no-op the moment swagger_setup imports it.
-import app.swagger_setup as _swagger_setup
-from app.extensions import api as _api
-from app.marketing.routes import (  # noqa: E402
-    MAIL_NOT_CONFIGURED,
-    marketing_ns,
-    render_campaign_email,
-)
-
-if not hasattr(_swagger_setup, "marketing_ns"):
-    _api.add_namespace(marketing_ns, path="/api/marketing")
+from app.marketing.routes import MAIL_NOT_CONFIGURED, render_campaign_email
 
 
 CONSENT_WORDING = ("Email me Moonlight Freight shipping offers and service "

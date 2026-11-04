@@ -15,17 +15,9 @@ from uuid import uuid4
 import pytest
 
 from app.advertising import throttle
-from app.advertising.routes import ads_ns
-from app.extensions import api, db
+from app.extensions import db
 from app.models.advertising import AdCampaign, AdCreative, AdPlacement, SiteNotice
 from tests.conftest import auth_header, register_and_login
-
-# ``app/swagger_setup.py`` is owned by another workstream this week, so the
-# namespace is not mounted in the application yet. Mounting it here at
-# collection time — before any test has built the app — registers it exactly
-# as swagger_setup will; the guard makes this a no-op once that lands.
-if not any(ns.name == "ads" for ns in api.namespaces):
-    api.add_namespace(ads_ns, path="/api/ads")
 
 BASE = "/api/ads"
 PAST = (datetime.utcnow() - timedelta(days=2)).isoformat()
@@ -779,7 +771,11 @@ def test_seeded_nepali_is_present_only_where_it_was_written(app):
 
 
 def test_the_seed_command_is_registered(app):
-    from app.advertising.commands import register_advertising_commands
+    """Registered by create_app, not by this test.
 
-    register_advertising_commands(app)
+    An earlier version called register_advertising_commands() itself and
+    then asserted the result, which passes whether or not the application
+    wires it up -- see tests/test_wiring.py for the same check across every
+    module added alongside this one.
+    """
     assert "seed-ads" in app.cli.commands

@@ -15,32 +15,15 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from app.extensions import api, db
+from app.extensions import db
 from app.analytics.collect import record_event
-from app.analytics.routes import analytics_ns
 from app.models.analytics import AnalyticsDaily, AnalyticsEvent
 from app.models.consent import hash_identifier
 from tests.conftest import auth_header
 
-# The namespace is wired centrally in app/swagger_setup.py; until that
-# happens it is mounted here so these tests exercise the real URL. Guarded,
-# so it becomes a no-op the moment the central registration lands rather
-# than a duplicate-route error.
-if not any(ns.name == "analytics" for ns in api.namespaces):
-    api.add_namespace(analytics_ns, path="/api/analytics")
-
 
 BOT_AGENT = "ExampleCrawler/1.0 (+https://example.invalid/crawler)"
 HUMAN_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/121.0"
-
-
-@pytest.fixture(scope="module", autouse=True)
-def analytics_cli(app):
-    """Register the CLI jobs the way app/cli.py will, once."""
-    from app.analytics.commands import register_analytics_commands
-    if "analytics-rollup" not in app.cli.commands:
-        register_analytics_commands(app)
-    return app
 
 
 @pytest.fixture

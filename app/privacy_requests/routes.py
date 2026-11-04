@@ -124,6 +124,39 @@ def _export_dir():
     return os.path.join(current_app.root_path, "..", "storage", DEFAULT_EXPORT_SUBDIR)
 
 
+#: How long a written bundle stays on disk before `flask privacy-exports-prune`
+#: removes it. Short on purpose: the file exists to be handed to one person
+#: through whatever channel the identity check established, and after that it
+#: is a complete copy of someone's record sitting in a folder.
+#: [TO CONFIRM with the owner: long enough for your delivery process.]
+EXPORT_RETENTION_DAYS = 30
+
+
+def ensure_private_dir(directory):
+    """Create the export directory so only the service account can read it.
+
+    `os.makedirs` applies the process umask, which on a typical server
+    leaves a directory world-readable. A folder of complete customer
+    records is the one place on this system where that is unacceptable, so
+    the mode is set explicitly — and also on an existing directory, since
+    `makedirs` ignores `mode` when the path is already there and the first
+    version of this code therefore hardened only brand-new installs.
+
+    POSIX modes are close to meaningless on Windows, where development
+    happens; this is for the Linux host that actually serves the site.
+    """
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        # Unsupported filesystem. The directory still exists; the caller
+        # should not fail a data-subject request over a permission bit.
+        current_app.logger.warning(
+            "Could not restrict permissions on the privacy export directory "
+            "%s; confirm it is not readable by other accounts.", directory)
+    return directory
+
+
 def _redacted_shipment(shipment):
     """One shipment as it appears in the subject's own export."""
     payload = shipment.to_dict()
@@ -615,10 +648,15 @@ class DataRequestExport(Resource):
 
         Refuses until identity is verified.
 
-        [TO CONFIRM with the owner: the export directory is not encrypted at
-        rest and nothing deletes old bundles. Both should be settled before
-        this is used in production — an unattended folder of complete
-        customer files is a worse exposure than the records it came from.]
+        The directory and the file are created 0700/0600 so that only the
+        service account can read them, and `flask privacy-exports-prune`
+        deletes bundles older than ``EXPORT_RETENTION_DAYS``. Neither is
+        encryption: an unattended folder of complete customer files is a
+        worse exposure than the records it came from, so the folder should
+        be short-lived rather than merely tidy.
+
+        [TO CONFIRM with the owner: whether the host encrypts this volume at
+        rest, and whether the prune should run on a schedule.]
         """
         record = _require_verified(_load_request(request_id))
         user = db.session.get(User, record.user_id) if record.user_id else None
@@ -632,12 +670,14 @@ class DataRequestExport(Resource):
             "verified_at": record.identity_verified_at.isoformat(),
         }
 
-        directory = _export_dir()
-        os.makedirs(directory, exist_ok=True)
+        directory = ensure_private_dir(_export_dir())
         stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
         filename = f"{record.reference}-{stamp}.json"
         path = os.path.abspath(os.path.join(directory, filename))
-        with open(path, "w", encoding="utf-8") as handle:
+        # Opened at 0600 rather than chmod-ed afterwards, so there is no
+        # window in which the file exists with the umask's permissions.
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(bundle, handle, indent=2, ensure_ascii=False, default=str)
 
         record.export_path = path[:500]
