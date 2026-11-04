@@ -13,6 +13,23 @@ from datetime import datetime
 from app.extensions import db
 
 
+def _translation_state(heading, body):
+    """How far the Nepali version of one item has got.
+
+    Three states rather than a boolean, because they are three different
+    jobs: nothing written, a headline written but the body still to do, and
+    finished. Every seeded creative is missing its body, so a boolean would
+    report all of them identically and hide the one campaign that has no
+    Nepali at all — which is the student campaign, whose audience is the
+    only one reading in Nepal.
+    """
+    if heading and body:
+        return "complete"
+    if heading or body:
+        return "partial"
+    return "none"
+
+
 class AdCampaign(db.Model):
     """A promotion with a reason, a period and a budget of attention."""
 
@@ -60,7 +77,7 @@ class AdCampaign(db.Model):
             return False
         return True
 
-    def to_dict(self, include_creatives=False):
+    def to_dict(self, include_creatives=False, admin=False):
         d = {
             "id": self.id,
             "code": self.code,
@@ -77,7 +94,11 @@ class AdCampaign(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
         if include_creatives:
-            d["creatives"] = [c.to_dict() for c in self.creatives]
+            # Nested creatives follow the caller's own shape. Returning the
+            # public one from an admin endpoint meant a single response
+            # mixed the two, so a reader could not tell from the payload
+            # whether the Nepali columns were absent or merely empty.
+            d["creatives"] = [c.to_dict(admin=admin) for c in self.creatives]
         return d
 
 
@@ -219,8 +240,13 @@ class AdCreative(db.Model):
                 "body_ne": self.body_ne,
                 "page_paths": self.page_paths or [],
                 "countries": self.countries or [],
-                # So a list can flag the gap without comparing strings.
+                # `needs_nepali` means "not fully translated", which is true
+                # of a creative with a reviewed headline and no body yet. On
+                # its own it collapses two states that matter differently to
+                # whoever is commissioning the translation, so the tri-state
+                # is given as well and is what a list should show.
                 "needs_nepali": not (self.headline_ne and self.body_ne),
+                "nepali_state": _translation_state(self.headline_ne, self.body_ne),
             })
         return payload
 
@@ -331,5 +357,6 @@ class SiteNotice(db.Model):
                 "body_ne": self.body_ne,
                 "page_paths": self.page_paths or [],
                 "needs_nepali": not (self.title_ne and self.body_ne),
+                "nepali_state": _translation_state(self.title_ne, self.body_ne),
             })
         return payload

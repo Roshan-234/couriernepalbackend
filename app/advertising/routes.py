@@ -645,7 +645,7 @@ class CampaignDetail(Resource):
     @require_roles("admin", "super_admin")
     def get(self, campaign_id):
         """One campaign and its creatives."""
-        return _load_campaign(campaign_id).to_dict(include_creatives=True), 200
+        return _load_campaign(campaign_id).to_dict(include_creatives=True, admin=True), 200
 
     @ads_ns.doc("update_campaign", security="Bearer")
     @ads_ns.expect(campaign_input)

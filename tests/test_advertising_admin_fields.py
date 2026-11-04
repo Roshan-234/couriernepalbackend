@@ -146,3 +146,65 @@ def test_the_public_endpoint_does_not(client, fixtures):
     for item in r.get_json()["items"]:
         assert "headline_ne" not in item
         assert "countries" not in item
+
+
+# ── The translation state is three states, not a boolean ─────────────────────
+
+def test_translation_state_distinguishes_partial_from_none(app, fixtures):
+    """A boolean reports "no Nepali" for a creative that has a reviewed
+    headline, which is the distinction the flag exists to surface."""
+    with app.app_context():
+        complete = db.session.get(AdCreative, fixtures["creative_id"])
+        assert complete.to_dict(admin=True)["nepali_state"] == "complete"
+        assert complete.to_dict(admin=True)["needs_nepali"] is False
+
+        partial = AdCreative(campaign_id=fixtures["campaign_id"],
+                             placement_id=complete.placement_id,
+                             headline="Headline only", headline_ne=NEPALI_HEADLINE)
+        none_yet = AdCreative(campaign_id=fixtures["campaign_id"],
+                              placement_id=complete.placement_id,
+                              headline="Nothing translated")
+        db.session.add_all([partial, none_yet])
+        db.session.commit()
+
+        assert partial.to_dict(admin=True)["nepali_state"] == "partial"
+        assert none_yet.to_dict(admin=True)["nepali_state"] == "none"
+        # Both are "needs Nepali", which is why the boolean alone is not
+        # enough to drive a list.
+        assert partial.to_dict(admin=True)["needs_nepali"] is True
+        assert none_yet.to_dict(admin=True)["needs_nepali"] is True
+
+
+def test_notice_translation_state(app, fixtures):
+    with app.app_context():
+        notice = db.session.get(SiteNotice, fixtures["notice_id"])
+        # Title in Nepali, body never written.
+        assert notice.to_dict(admin=True)["nepali_state"] == "partial"
+
+
+def test_the_public_shape_has_no_translation_state(app, fixtures):
+    with app.app_context():
+        creative = db.session.get(AdCreative, fixtures["creative_id"])
+        assert "nepali_state" not in creative.to_dict()
+
+
+# ── One response, one shape ──────────────────────────────────────────────────
+
+def test_admin_campaign_detail_nests_admin_creatives(client, admin_token, fixtures):
+    """A response that mixed the two shapes left a reader unable to tell
+    whether the Nepali columns were absent or merely empty."""
+    r = client.get(f"/api/ads/campaigns/{fixtures['campaign_id']}",
+                   headers={"Authorization": f"Bearer {admin_token}"})
+    assert r.status_code == 200
+    creatives = r.get_json()["creatives"]
+    assert creatives, "fixture campaign should have creatives"
+    for creative in creatives:
+        assert "headline_ne" in creative
+        assert "nepali_state" in creative
+
+
+def test_public_campaign_shape_still_nests_public_creatives(app, fixtures):
+    with app.app_context():
+        campaign = db.session.get(AdCampaign, fixtures["campaign_id"])
+        for creative in campaign.to_dict(include_creatives=True)["creatives"]:
+            assert "headline_ne" not in creative
