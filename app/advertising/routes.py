@@ -29,11 +29,11 @@ separate piece of work and is deliberately not half-started here.
 import inspect
 from datetime import datetime
 
-from flask import current_app, make_response, request
+from flask import current_app, make_response, request, send_from_directory
 from flask_restx import Namespace, Resource, fields
 from werkzeug.exceptions import BadRequest, Conflict, NotFound, TooManyRequests
 
-from app.advertising import throttle
+from app.advertising import throttle, uploads
 from app.auth.utils import require_roles
 from app.extensions import db, limiter
 from app.models.advertising import AdCampaign, AdCreative, AdPlacement, SiteNotice
@@ -998,6 +998,94 @@ class CreativeDeactivate(Resource):
         creative.is_active = False
         db.session.commit()
         return creative.to_dict(admin=True), 200
+
+
+@ads_ns.route("/creatives/<int:creative_id>/image")
+@ads_ns.param("creative_id", "The creative identifier")
+class CreativeImage(Resource):
+    @ads_ns.doc("upload_creative_image", security="Bearer")
+    @ads_ns.response(201, "Stored, and the creative now points at it")
+    @ads_ns.response(400, "Not an image this site will serve")
+    @require_roles("admin", "super_admin")
+    def post(self, creative_id):
+        """Attach an image to a creative.
+
+        Send ``multipart/form-data`` with the file under ``file``. The upload
+        is decoded and written out again from its pixels rather than stored
+        as sent, the stored name is generated here, and camera metadata does
+        not survive — see ``app/advertising/uploads.py`` for why each of
+        those matters.
+
+        Replacing an image deletes the previous file, because an advert image
+        that no creative references is just an orphaned public URL.
+
+        Alt text is not required to upload, only to activate. Someone sorting
+        out artwork should not be forced to write copy in the same sitting,
+        but the creative cannot go live until they do.
+        """
+        creative = _load_creative(creative_id)
+        stored_name, content_type, width, height = uploads.store_image(
+            request.files.get("file"))
+
+        previous = uploads.stored_name_from_url(creative.image_path)
+        creative.image_path = uploads.public_url(stored_name)
+        db.session.commit()
+        if previous and previous != stored_name:
+            uploads.delete_image(previous)
+
+        return {
+            "creative": creative.to_dict(admin=True),
+            "image": {
+                "url": creative.image_path,
+                "content_type": content_type,
+                "width": width,
+                "height": height,
+            },
+            "note": ("Stored. The creative still needs alt text before it can "
+                     "be activated." if not creative.image_alt else "Stored."),
+        }, 201
+
+    @ads_ns.doc("delete_creative_image", security="Bearer")
+    @require_roles("admin", "super_admin")
+    def delete(self, creative_id):
+        """Remove the image, leaving the creative as text-only.
+
+        Deactivates nothing: a text-only creative is a legitimate advert, and
+        the alt-text rule only bites while an image is set.
+        """
+        creative = _load_creative(creative_id)
+        previous = uploads.stored_name_from_url(creative.image_path)
+        creative.image_path = None
+        db.session.commit()
+        if previous:
+            uploads.delete_image(previous)
+        return creative.to_dict(admin=True), 200
+
+
+@ads_ns.route("/images/<string:name>")
+@ads_ns.param("name", "The stored image name")
+class CreativeImageFile(Resource):
+    @ads_ns.doc("serve_creative_image")
+    @ads_ns.response(200, "The image")
+    @ads_ns.response(404, "No such image")
+    def get(self, name):
+        """Serve a stored advert image. Public, because adverts are.
+
+        The name is matched against the shape this system generates rather
+        than sanitised, so nothing a caller invents reaches the filesystem.
+        """
+        if not uploads.safe_stored_name(name):
+            raise NotFound("No such image")
+        try:
+            response = send_from_directory(uploads.images_dir(), name,
+                                           conditional=True)
+        except NotFound:
+            raise NotFound("No such image")
+        # Content-addressed by a random name: a given URL never changes, so
+        # it can be cached hard. Replacing an image issues a new name.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
 # ── Administration: notices ──────────────────────────────────────────────────

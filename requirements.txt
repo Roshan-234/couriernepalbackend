@@ -34,6 +34,11 @@ PyMySQL[rsa]==1.1.1
 # Invoice and packing-list workbook exports
 openpyxl==3.1.5
 
+# Advert image uploads. Every upload is decoded and re-encoded through
+# Pillow rather than stored as sent, which is what removes polyglot
+# files and strips camera EXIF; see app/advertising/uploads.py.
+Pillow==12.1.0
+
 # Shared production rate-limit storage
 redis>=5,<7
 
