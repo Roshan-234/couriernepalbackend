@@ -922,7 +922,7 @@ class CreativeList(Resource):
         """The creatives belonging to a campaign, highest priority first."""
         campaign = _load_campaign(campaign_id)
         creatives = sorted(campaign.creatives, key=lambda c: (-(c.priority or 0), c.id))
-        return {"items": [c.to_dict() for c in creatives], "total": len(creatives),
+        return {"items": [c.to_dict(admin=True) for c in creatives], "total": len(creatives),
                 "campaign_id": campaign.id}, 200
 
     @ads_ns.doc("create_creative", security="Bearer")
@@ -939,7 +939,7 @@ class CreativeList(Resource):
         creative = _apply_creative(json_object(), campaign)
         db.session.add(creative)
         db.session.commit()
-        return creative.to_dict(), 201
+        return creative.to_dict(admin=True), 201
 
 
 @ads_ns.route("/creatives/<int:creative_id>")
@@ -950,7 +950,7 @@ class CreativeDetail(Resource):
     @require_roles("admin", "super_admin")
     def get(self, creative_id):
         """One creative, with its counters."""
-        return _load_creative(creative_id).to_dict(), 200
+        return _load_creative(creative_id).to_dict(admin=True), 200
 
     @ads_ns.doc("update_creative", security="Bearer")
     @ads_ns.expect(creative_input)
@@ -960,7 +960,7 @@ class CreativeDetail(Resource):
         creative = _load_creative(creative_id)
         _apply_creative(json_object(), creative.campaign, creative)
         db.session.commit()
-        return creative.to_dict(), 200
+        return creative.to_dict(admin=True), 200
 
     @ads_ns.doc("delete_creative", security="Bearer")
     @require_roles("admin", "super_admin")
@@ -984,7 +984,7 @@ class CreativeActivate(Resource):
         creative.is_active = True
         _require_alt_text(creative)
         db.session.commit()
-        return creative.to_dict(), 200
+        return creative.to_dict(admin=True), 200
 
 
 @ads_ns.route("/creatives/<int:creative_id>/deactivate")
@@ -997,7 +997,7 @@ class CreativeDeactivate(Resource):
         creative = _load_creative(creative_id)
         creative.is_active = False
         db.session.commit()
-        return creative.to_dict(), 200
+        return creative.to_dict(admin=True), 200
 
 
 # ── Administration: notices ──────────────────────────────────────────────────
@@ -1091,7 +1091,7 @@ class AdminNoticeList(Resource):
         paginated = (query.order_by(SiteNotice.priority.desc(), SiteNotice.id.desc())
                      .paginate(page=page, per_page=per_page, error_out=False))
         return {
-            "items": [n.to_dict() for n in paginated.items],
+            "items": [n.to_dict(admin=True) for n in paginated.items],
             "total": paginated.total,
             "page": page,
             "per_page": per_page,
@@ -1108,7 +1108,7 @@ class AdminNoticeList(Resource):
         notice.created_by = int(get_jwt_identity())
         db.session.add(notice)
         db.session.commit()
-        return notice.to_dict(), 201
+        return notice.to_dict(admin=True), 201
 
 
 @ads_ns.route("/admin/notices/<int:notice_id>")
@@ -1119,7 +1119,7 @@ class AdminNoticeDetail(Resource):
     @require_roles("admin", "super_admin")
     def get(self, notice_id):
         """One notice, including its dismissal count."""
-        return _load_notice(notice_id).to_dict(), 200
+        return _load_notice(notice_id).to_dict(admin=True), 200
 
     @ads_ns.doc("update_notice", security="Bearer")
     @ads_ns.expect(notice_input)
@@ -1128,7 +1128,7 @@ class AdminNoticeDetail(Resource):
         """Edit a notice."""
         notice = _apply_notice(json_object(), _load_notice(notice_id))
         db.session.commit()
-        return notice.to_dict(), 200
+        return notice.to_dict(admin=True), 200
 
     @ads_ns.doc("delete_notice", security="Bearer")
     @require_roles("admin", "super_admin")
@@ -1150,7 +1150,7 @@ class AdminNoticeActivate(Resource):
         notice = _load_notice(notice_id)
         notice.is_active = True
         db.session.commit()
-        return notice.to_dict(), 200
+        return notice.to_dict(admin=True), 200
 
 
 @ads_ns.route("/admin/notices/<int:notice_id>/deactivate")
@@ -1163,7 +1163,7 @@ class AdminNoticeDeactivate(Resource):
         notice = _load_notice(notice_id)
         notice.is_active = False
         db.session.commit()
-        return notice.to_dict(), 200
+        return notice.to_dict(admin=True), 200
 
 
 # ── Reporting ────────────────────────────────────────────────────────────────

@@ -178,9 +178,22 @@ class AdCreative(db.Model):
             return False
         return True
 
-    def to_dict(self, language="en"):
+    def to_dict(self, language="en", admin=False):
+        """The creative as JSON.
+
+        Two audiences, and they need opposite things. A visitor's browser
+        gets one resolved language and nothing else: sending the Nepali and
+        the targeting rules to the public page would be both wasteful and a
+        small disclosure of how campaigns are aimed.
+
+        An administrator needs the opposite — the stored values, unresolved,
+        because they are editing them. Without ``admin=True`` the management
+        screens could not show which creatives are still missing their
+        Nepali copy, and an editor loading a form from this shape would
+        render those boxes empty and silently blank the stored text on save.
+        """
         nepali = language == "ne"
-        return {
+        payload = {
             "id": self.id,
             "campaign_id": self.campaign_id,
             "placement_id": self.placement_id,
@@ -198,6 +211,18 @@ class AdCreative(db.Model):
             "clicks": self.clicks,
             "click_through_rate": self.click_through_rate,
         }
+        if admin:
+            payload.update({
+                "headline": self.headline,
+                "body": self.body,
+                "headline_ne": self.headline_ne,
+                "body_ne": self.body_ne,
+                "page_paths": self.page_paths or [],
+                "countries": self.countries or [],
+                # So a list can flag the gap without comparing strings.
+                "needs_nepali": not (self.headline_ne and self.body_ne),
+            })
+        return payload
 
 
 class SiteNotice(db.Model):
@@ -275,9 +300,10 @@ class SiteNotice(db.Model):
             return True
         return any(path == p or path.startswith(p.rstrip("*")) for p in paths)
 
-    def to_dict(self, language="en"):
+    def to_dict(self, language="en", admin=False):
+        """See :meth:`AdCreative.to_dict` — same split, same reason."""
         nepali = language == "ne"
-        return {
+        payload = {
             "id": self.id,
             "code": self.code,
             "title": (self.title_ne if nepali and self.title_ne else self.title),
@@ -297,3 +323,13 @@ class SiteNotice(db.Model):
             "impressions": self.impressions,
             "dismissals": self.dismissals,
         }
+        if admin:
+            payload.update({
+                "title": self.title,
+                "body": self.body,
+                "title_ne": self.title_ne,
+                "body_ne": self.body_ne,
+                "page_paths": self.page_paths or [],
+                "needs_nepali": not (self.title_ne and self.body_ne),
+            })
+        return payload
