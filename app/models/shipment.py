@@ -82,6 +82,29 @@ class Shipment(db.Model):
     tax_amount         = db.Column(db.Float, default=0.0)
     total_charge       = db.Column(db.Float, default=0.0)
 
+    #: Whether the figures above are a price or a placeholder.
+    #:
+    #: Booking is deliberately never refused for want of a tariff — a parcel
+    #: in front of a counter clerk gets accepted and priced by hand. But the
+    #: charge columns default to 0.0, so an unpriced shipment used to be
+    #: indistinguishable from a free one, and an invoice could be raised
+    #: against it for nothing. With no international lanes loaded, that was
+    #: every shipment on the company's main business.
+    #:
+    #: `unrated` means nobody has priced this yet. It is not zero.
+    PRICED = 'priced'
+    UNRATED = 'unrated'
+    PRICING_FAILED = 'failed'
+    PRICING_STATUSES = (PRICED, UNRATED, PRICING_FAILED)
+
+    pricing_status     = db.Column(db.String(20), default=UNRATED, index=True)
+    #: Why, in words, for whoever has to quote it by hand.
+    pricing_note       = db.Column(db.String(255))
+
+    @property
+    def needs_manual_pricing(self):
+        return self.pricing_status != self.PRICED
+
     # External carrier hand-off
     carrier_id          = db.Column(db.Integer, db.ForeignKey('carrier_connectors.id'))
     carrier_tracking_no = db.Column(db.String(100), index=True)
@@ -189,6 +212,9 @@ class Shipment(db.Model):
             "surcharge_total":       self.surcharge_total,
             "tax_amount":            self.tax_amount,
             "total_charge":          self.total_charge,
+            "pricing_status":        self.pricing_status,
+            "pricing_note":          self.pricing_note,
+            "needs_manual_pricing":  self.needs_manual_pricing,
             "carrier_id":            self.carrier_id,
             "carrier_tracking_no":   self.carrier_tracking_no,
             "delivery_attempt_count": self.delivery_attempt_count,

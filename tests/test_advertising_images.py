@@ -283,3 +283,25 @@ def test_uploading_does_not_bypass_the_alt_text_requirement(
                json={"image_alt": "Dashain cargo offer banner"}, headers=headers)
     assert client.post(f"/api/ads/creatives/{creative}/activate",
                        headers=headers).status_code == 200
+
+
+# ── Caching ──────────────────────────────────────────────────────────────────
+
+def test_images_are_cacheable_while_the_rest_of_the_api_is_not(
+        client, admin_token, creative, image_dir):
+    """The security hook sets `no-store` on everything under /api.
+
+    That is right for shipment records and wrong for a public banner fetched
+    on every page view under a name that is never reused. The exemption is
+    narrow and this test is what keeps it narrow.
+    """
+    url = _upload(client, admin_token, creative, _png()).get_json()["creative"]["image_path"]
+
+    image = client.get(url)
+    assert "no-store" not in image.headers.get("Cache-Control", "")
+    assert "immutable" in image.headers.get("Cache-Control", "")
+    assert "Pragma" not in image.headers
+
+    # Everything else still is not cacheable.
+    other = client.get("/api/ads/serve", query_string={"path": "/"})
+    assert other.headers.get("Cache-Control") == "no-store"

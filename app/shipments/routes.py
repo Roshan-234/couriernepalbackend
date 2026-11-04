@@ -3,7 +3,7 @@
 import uuid
 import math
 from datetime import datetime, timedelta
-from flask import request
+from flask import current_app, request
 from sqlalchemy.orm import selectinload
 from app.validation import shipment_data, json_object, tracking_update
 from flask_restx import Namespace, Resource, fields
@@ -229,8 +229,15 @@ def _price(shipment):
     """Price a shipment from the rate engine and store the breakdown.
 
     Pricing is advisory at booking time: a route with no published lane is a
-    tariff gap, not a reason to refuse the parcel. When no rate matches, the
-    charge fields stay at zero and operations can price it by hand.
+    tariff gap, not a reason to refuse the parcel. A clerk with a customer in
+    front of them accepts it and prices it by hand afterwards.
+
+    What the shipment must never do is *look* priced when it is not. The
+    charge columns default to 0.0, so an unrated shipment was previously
+    indistinguishable from a genuinely free one and an invoice could be
+    raised against it for nothing. With no international tariff loaded that
+    described every shipment on the company's main business. So every path
+    out of here sets `pricing_status`, and only a matched lane sets `priced`.
     """
     from app.rating import quote
 
@@ -252,11 +259,22 @@ def _price(shipment):
             merchant_id=shipment.merchant_id,
         )
     except Exception:
-        # A pricing fault must never lose the booking.
+        # A pricing fault must never lose the booking — but it must not pass
+        # for a price either.
+        current_app.logger.exception("Pricing failed for shipment %s",
+                                     getattr(shipment, "tracking_no", "(new)"))
+        shipment.pricing_status = Shipment.PRICING_FAILED
+        shipment.pricing_note = "The pricing engine errored; quote this by hand."
         return None
 
     if result.get("status") != "ok":
+        shipment.pricing_status = Shipment.UNRATED
+        shipment.pricing_note = (result.get("message")
+                                 or "No tariff covers this route.")[:255]
         return result
+
+    shipment.pricing_status = Shipment.PRICED
+    shipment.pricing_note = None
 
     weight = result.get("weight") or {}
     shipment.volumetric_weight_kg = weight.get("volumetric_weight_kg") or 0.0
@@ -442,6 +460,17 @@ class ShipmentPage(Resource):
             if not is_valid(status):
                 ship_ns.abort(400, 'Unknown shipment status')
             query = query.filter(Shipment.status == status)
+        # The queue a clerk works through: everything still carrying a
+        # placeholder zero instead of a price.
+        if args.get('needs_pricing') in ('1', 'true'):
+            query = query.filter(Shipment.pricing_status != Shipment.PRICED)
+        elif args.get('needs_pricing') in ('0', 'false'):
+            query = query.filter(Shipment.pricing_status == Shipment.PRICED)
+        pricing_status = args.get('pricing_status', '').strip()
+        if pricing_status:
+            if pricing_status not in Shipment.PRICING_STATUSES:
+                ship_ns.abort(400, 'Unknown pricing status')
+            query = query.filter(Shipment.pricing_status == pricing_status)
         if args.get('is_cod') in ('1', 'true'):
             query = query.filter(Shipment.is_cod.is_(True))
         elif args.get('is_cod') in ('0', 'false'):
@@ -511,12 +540,17 @@ class ShipmentPage(Resource):
             tally(Shipment.status == OUT_FOR_DELIVERY),
             tally(Shipment.status.in_((DELIVERY_ATTEMPTED, ON_HOLD))),
             tally(Shipment.is_cod.is_(True)),
+            # Shipments carrying a placeholder zero rather than a price. This
+            # is a revenue number, not a tidiness one: each of these can be
+            # invoiced for nothing until somebody quotes it.
+            tally(Shipment.pricing_status != Shipment.PRICED),
             func.coalesce(func.sum(case((Shipment.is_cod.is_(True), Shipment.cod_amount), else_=0)), 0),
         ).one()
 
         result = query.order_by(Shipment.created_at.desc(), Shipment.id.desc()).paginate(page=page, per_page=size, error_out=False)
         keys = ('total', 'in_transit', 'delivered', 'pending',
-                'out_for_delivery', 'needs_attention', 'cod_count')
+                'out_for_delivery', 'needs_attention', 'cod_count',
+                'needs_pricing')
         summary = {key: int(value or 0) for key, value in zip(keys, counts)}
         summary['cod_amount'] = round(float(counts[-1] or 0), 2)
         return {'items': [shipment.to_dict() for shipment in result.items], 'total': result.total,

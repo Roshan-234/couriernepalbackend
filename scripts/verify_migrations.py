@@ -49,7 +49,20 @@ with app.app_context():
     assert shipment.total_weight_kg == 4 and shipment.total_packages == 2
     assert TrackingEvent.query.count() == 2
     assert {event.shipment_id for event in TrackingEvent.query.all()} == {1}
-    assert SitePage.query.count() == 14
+    # Derived, not hardcoded. This was `== 14` and broke the moment the
+    # privacy and cookie pages were added — a number nobody updates is a
+    # tripwire for the next person rather than a check on this one. What
+    # matters here is that seeding after a migration produces every page it
+    # defines, not that there happen to be fourteen of them.
+    from app.content.privacy_pages import PAGES as POLICY_PAGES
+    from app.content.seed import DEFAULTS, SERVICES
+    expected_paths = ({path for path, *_ in DEFAULTS}
+                      | {'/services/' + slug for slug in SERVICES}
+                      | {page['path'] for page in POLICY_PAGES})
+    actual_paths = {path for (path,) in db.session.query(SitePage.path).all()}
+    missing = expected_paths - actual_paths
+    assert not missing, f'seeding did not produce: {sorted(missing)}'
+    assert SitePage.query.count() == len(expected_paths)
     for name in ('services', 'faqs', 'warehouses'):
         assert db.session.execute(text(f'SELECT is_active FROM {name} WHERE id = 1')).scalar() == 1
     result = app.test_cli_runner().invoke(args=['schema-check'])

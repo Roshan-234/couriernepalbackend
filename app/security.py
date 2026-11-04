@@ -84,6 +84,19 @@ def install_security(app):
                 'max-age=31536000; includeSubDomains'
             )
         if request.path.startswith('/api'):
-            response.headers['Cache-Control'] = 'no-store'
-            response.headers['Pragma'] = 'no-cache'
+            # `no-store` is right for everything this API normally returns:
+            # shipment records, customer details, admin listings. None of it
+            # should sit in a shared cache or a browser's disk.
+            #
+            # Advert images are the exception, and the only one. They are
+            # public by nature, served under a random content-addressed name
+            # that is never reused, and fetched on every page view that
+            # shows a banner. Overwriting their caching headers here meant
+            # the route's own `immutable` was discarded on the wire and
+            # every visitor re-downloaded every banner on every page.
+            if request.path.startswith('/api/ads/images/'):
+                response.headers.pop('Pragma', None)
+            else:
+                response.headers['Cache-Control'] = 'no-store'
+                response.headers['Pragma'] = 'no-cache'
         return response

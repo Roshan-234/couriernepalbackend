@@ -98,9 +98,20 @@ class ProductionConfig(Config):
     _password = os.getenv("MYSQL_PASSWORD")
     _database = os.getenv("MYSQL_DATABASE")
     if _host and _user and _database:
+        # charset=utf8mb4 is not optional for this application. A shared
+        # cPanel MySQL commonly defaults the connection to latin1 or to
+        # utf8mb3, and this database stores Nepali Devanagari throughout —
+        # notification templates, advert copy, site notices, customer names
+        # and addresses. On a latin1 connection that arrives as mojibake and
+        # the damage is done at write time, so no later fix recovers it.
+        # utf8mb3 would also silently reject anything outside the basic
+        # plane, which includes emoji in a customer's name or address.
+        #
+        # The server's own default is not enough: the *connection* charset is
+        # what governs the bytes, and it is set here.
         SQLALCHEMY_DATABASE_URI = (
             f"mysql+pymysql://{quote_plus(_user)}:{quote_plus(_password or '')}"
-            f"@{_host}/{_database}"
+            f"@{_host}/{_database}?charset=utf8mb4"
         )
 
 class TestingConfig(Config):
