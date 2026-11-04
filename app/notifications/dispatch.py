@@ -34,6 +34,7 @@ Three further rules:
 """
 
 import json
+import re
 from datetime import datetime, timedelta
 
 from flask import current_app
@@ -75,6 +76,62 @@ def _mail_configured():
         return False
     return bool(getattr(state, "server", None)
                 and getattr(state, "default_sender", None))
+
+
+#: Matches a placeholder the template author wrote but nothing filled.
+_UNFILLED = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")
+
+
+def shipment_context(shipment):
+    """Every placeholder the shipment templates actually use.
+
+    Worth keeping in step with the seeded wording. The first version of
+    this supplied six values and the templates reference eleven, so a
+    customer would have been sent the literal text "Track it at
+    {tracking_url}" — which is the kind of thing that is obvious in
+    hindsight and invisible until somebody reads a real message.
+    """
+    site = (current_app.config.get("FRONTEND_URL") or "").rstrip("/")
+    rider = getattr(shipment, "rider", None)
+    return {
+        "tracking_no": shipment.tracking_no,
+        "status": shipment.status,
+        "origin": shipment.origin,
+        "destination": shipment.destination,
+        "sender_name": shipment.sender_name,
+        "receiver_name": shipment.receiver_name,
+        "recipient_name": shipment.receiver_name,
+        "tracking_url": f"{site}/tracking?id={shipment.tracking_no}" if site else "",
+        "estimated_delivery": (shipment.estimated_delivery.strftime("%d %b %Y")
+                               if shipment.estimated_delivery else "to be confirmed"),
+        "delivered_at": (shipment.delivered_at.strftime("%d %b %Y")
+                         if shipment.delivered_at else ""),
+        # A parcel can be out for delivery before a named rider is on it.
+        # Leaving these empty renders "Rider: , " which reads as a broken
+        # message, so they fall back to something a customer can act on.
+        "rider_name": (getattr(rider, "full_name", None)
+                       or getattr(rider, "name", None) or "our delivery team"),
+        "rider_phone": (getattr(rider, "phone", None)
+                        or current_app.config.get("COMPANY_PHONE", "")),
+        "branch_phone": current_app.config.get("COMPANY_PHONE", ""),
+    }
+
+
+def _finalise(text):
+    """Remove any placeholder nothing filled, and say which they were.
+
+    A customer should never receive a message containing `{rider_phone}`.
+    Blanking it is the least-bad outcome, and naming the gap in the log is
+    what lets somebody fix the template rather than discover it twice.
+    """
+    missing = sorted({token.strip("{}") for token in _UNFILLED.findall(text or "")})
+    if not missing:
+        return text, []
+    cleaned = _UNFILLED.sub("", text or "")
+    # Collapse the double spaces and orphaned punctuation a removal leaves.
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned)
+    return cleaned.strip(), missing
 
 
 def _recipients_for(template, shipment, user=None):
@@ -171,8 +228,14 @@ def _transmit(template, subject, body, role, address):
     return NotificationLog.SUPPRESSED, f"no transport for channel {template.channel}"
 
 
-def notify(event, *, shipment=None, user=None, context=None, language="en"):
+def notify(event, *, shipment=None, user=None, context=None, language="en",
+           recipients=None):
     """Send (or record) every active template for one event.
+
+    `recipients` overrides the usual sender/receiver resolution with
+    explicit ``(role, address)`` pairs. A pickup carries its own contact
+    phone, which is a better number than the requesting account's — the
+    person waiting at the door is not always the person who booked.
 
     Returns the list of `NotificationLog` rows written, which is what the
     tests assert against. Never raises: the caller is in the middle of
@@ -187,22 +250,28 @@ def notify(event, *, shipment=None, user=None, context=None, language="en"):
 
         base_context = dict(context or {})
         if shipment is not None:
-            base_context.setdefault("tracking_no", shipment.tracking_no)
-            base_context.setdefault("status", shipment.status)
-            base_context.setdefault("origin", shipment.origin)
-            base_context.setdefault("destination", shipment.destination)
-            base_context.setdefault("receiver_name", shipment.receiver_name)
-            base_context.setdefault("sender_name", shipment.sender_name)
+            base_context = {**shipment_context(shipment), **base_context}
 
         enabled = sending_enabled()
 
         for template in templates:
-            for role, address in _recipients_for(template, shipment, user=user):
+            targets = (list(recipients) if recipients
+                       else _recipients_for(template, shipment, user=user))
+            for role, address in targets:
                 shipment_id = shipment.id if shipment is not None else None
                 if _already_sent(event, shipment_id, address):
                     continue
 
-                subject, body = template.render(base_context, language=language)
+                # The recipient's own name, so a receiver is not addressed
+                # as the sender.
+                person = (shipment.receiver_name if role == "receiver"
+                          else shipment.sender_name) if shipment is not None else None
+                render_context = {**base_context,
+                                  "customer_name": person or "customer"}
+                subject, body = template.render(render_context, language=language)
+                subject, missing_subject = _finalise(subject)
+                body, missing_body = _finalise(body)
+                unfilled = sorted(set(missing_subject) | set(missing_body))
                 if not body.strip():
                     entries.append(_log(
                         channel=template.channel, status=NotificationLog.SKIPPED,
@@ -218,6 +287,9 @@ def notify(event, *, shipment=None, user=None, context=None, language="en"):
                     status, detail = (NotificationLog.SUPPRESSED,
                                       "sending is switched off (NOTIFICATIONS_ENABLED)")
 
+                if unfilled and not detail:
+                    detail = ("template placeholders nothing filled: "
+                              + ", ".join(unfilled))[:300]
                 entries.append(_log(
                     channel=template.channel, status=status, event=event,
                     template_code=template.code, recipient=address,

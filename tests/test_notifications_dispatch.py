@@ -230,3 +230,93 @@ def test_one_address_on_both_sides_is_told_once(app, client, admin_token):
                      if e.channel == NotificationTemplate.EMAIL
                      and e.recipient == shared]
         assert len(delivered) == 1, f"told {len(delivered)} times at one address"
+
+
+# ── Placeholders are filled, or removed and reported ─────────────────────────
+
+def test_a_real_template_renders_with_no_placeholders_left(app, client, admin_token):
+    """The defect this guards against shipped once already.
+
+    The dispatcher supplied six values while the seeded templates
+    reference eleven, so a customer would have been sent the literal text
+    "Track it at {tracking_url}".
+    """
+    from app.data.seed_logistics import TEMPLATES
+    from app.notifications.dispatch import shipment_context, _finalise
+
+    with app.app_context():
+        # Seed the real wording if this database does not have it.
+        for code, event, channel, subject, body_en, body_ne in TEMPLATES:
+            if not NotificationTemplate.query.filter_by(code=code).first():
+                db.session.add(NotificationTemplate(
+                    code=code, name=code, event=event, channel=channel,
+                    subject=subject, body_en=body_en, body_ne=body_ne,
+                    is_active=False))
+        db.session.commit()
+
+        shipment = Shipment.query.first()
+        assert shipment is not None
+        context = {**shipment_context(shipment), "customer_name": "Test Customer"}
+
+        unfilled = {}
+        for template in NotificationTemplate.query.all():
+            subject, body = template.render(context)
+            _, missing_subject = _finalise(subject)
+            _, missing_body = _finalise(body)
+            gaps = sorted(set(missing_subject) | set(missing_body))
+            # Placeholders only an event payload can supply are fair.
+            gaps = [g for g in gaps if g not in {
+                "otp", "reason", "next_date", "remittance_no", "net_payable",
+                "pickup_no", "scheduled_date", "time_slot", "collected_count",
+                "amount", "invoice_no"}]
+            if gaps:
+                unfilled[template.code] = gaps
+
+        assert not unfilled, (
+            f"templates reference placeholders the dispatcher never fills: {unfilled}")
+
+
+def test_an_unfilled_placeholder_is_stripped_not_sent(app):
+    from app.notifications.dispatch import _finalise
+
+    cleaned, missing = _finalise("Rider: {rider_name}, {rider_phone}. Thanks.")
+    assert missing == ["rider_name", "rider_phone"]
+    assert "{" not in cleaned and "}" not in cleaned
+    # And it does not leave a trail of double spaces behind.
+    assert "  " not in cleaned
+
+
+def test_the_receiver_is_addressed_by_their_own_name(app, client, admin_token, booking):
+    shipment_id = booking["id"]
+    for status in ("picked_up", "in_transit", "out_for_delivery", "delivered"):
+        client.put(f"/api/shipments/{shipment_id}",
+                   json={"status": status}, headers=auth_header(admin_token))
+    with app.app_context():
+        receiver_rows = [e for e in _logs("shipment.delivered", shipment_id)
+                         if e.recipient_role == "receiver"]
+        assert receiver_rows
+        assert "Sita Sender" not in (receiver_rows[0].payload or ""), (
+            "the receiver was addressed as the sender")
+
+
+def test_a_parcel_with_no_rider_still_reads_as_a_sentence(app):
+    """"Rider: , " is not something to send a customer.
+
+    A parcel can be marked out for delivery before a named rider is on it,
+    and an empty substitution leaves the template's own punctuation behind.
+    """
+    from app.notifications.dispatch import shipment_context
+
+    with app.app_context():
+        shipment = Shipment.query.filter_by(rider_id=None).first()
+        if shipment is None:
+            pytest.skip("no rider-less shipment in this database")
+        context = shipment_context(shipment)
+        assert context["rider_name"].strip()
+        assert context["rider_phone"].strip()
+
+        rendered = ("Rider: {rider_name}, {rider_phone}"
+                    .replace("{rider_name}", context["rider_name"])
+                    .replace("{rider_phone}", context["rider_phone"]))
+        assert not rendered.rstrip().endswith(",")
+        assert ": ," not in rendered

@@ -8,6 +8,11 @@ load_dotenv()
 
 class Config:
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+
+    # Used where a message needs a number to fall back to — a parcel can be
+    # out for delivery before a named rider is assigned, and "Rider: ," is
+    # not something to send a customer.
+    COMPANY_PHONE = os.getenv("COMPANY_PHONE", "+977 1-5922458")
     MAX_CONTENT_LENGTH = 2 * 1024 * 1024
     SECRET_KEY = os.getenv("SECRET_KEY")
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")

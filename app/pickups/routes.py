@@ -6,6 +6,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.auth.utils import require_roles
 from app.data import nepal_geo
 from app.extensions import db
+from app.notifications.dispatch import notify
 from app.models.branch import Branch
 from app.models.pickup import Pickup
 from app.models.rider import Rider
@@ -303,6 +304,16 @@ class PickupComplete(Resource):
         if not pickup.started_at:
             pickup.started_at = pickup.completed_at
         db.session.commit()
+        # After the commit, and to the pickup's own contact rather than the
+        # account that booked it: on a merchant pickup those are often
+        # different people, and the one at the door is the one who cares.
+        contact = pickup.contact_phone or getattr(pickup.requester, 'phone', None)
+        if contact:
+            notify('pickup.completed',
+                   recipients=[('sender', contact)],
+                   context={'pickup_no': pickup.pickup_no,
+                            'customer_name': pickup.contact_name or 'customer',
+                            'collected_count': pickup.collected_count})
         return pickup.to_dict()
 
 

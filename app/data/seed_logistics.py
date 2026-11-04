@@ -419,6 +419,30 @@ TEMPLATES = [
     ("sms_delivery_failed", "shipment.delivery_failed", "sms", None,
      "We could not deliver {tracking_no} ({reason}). We will try again on {next_date}.",
      "हामीले {tracking_no} पुर्‍याउन सकेनौं ({reason})। {next_date} मा पुन: प्रयास गर्नेछौं।"),
+    # ── Added after the dispatcher was wired ─────────────────────────────
+    # The lifecycle fires these events, and until now there was no wording
+    # for them, so the customer heard nothing at those points. The Nepali
+    # below follows the pattern of the lines above it and is flagged in
+    # NEEDS_NATIVE_REVIEW: short, formulaic logistics phrasing is the
+    # easiest kind to get subtly wrong, and these go to customers.
+    ("sms_in_transit", "shipment.in_transit", "sms", None,
+     "Your parcel {tracking_no} is in transit to {destination}. Track it at {tracking_url}",
+     "तपाईंको पार्सल {tracking_no} {destination} तर्फ बाटोमा छ। {tracking_url} मा हेर्नुहोस्।"),
+    ("sms_returned", "shipment.returned", "sms", None,
+     "Parcel {tracking_no} is being returned to the sender. Our team will contact you.",
+     "पार्सल {tracking_no} पठाउनेलाई फिर्ता गरिंदैछ। हाम्रो टोलीले सम्पर्क गर्नेछ।"),
+    ("email_returned", "shipment.returned", "email",
+     "Your shipment {tracking_no} is being returned",
+     "Hello {customer_name},\n\n"
+     "Shipment {tracking_no} from {origin} to {destination} is being "
+     "returned to the sender.\n\n"
+     "Our team will be in touch to arrange it. You can follow the parcel "
+     "at {tracking_url}.\n\n"
+     "Moonlight Freight Pvt Ltd",
+     None),
+    ("sms_pickup_completed", "pickup.completed", "sms", None,
+     "Moonlight Freight: we have collected your parcel(s) for pickup {pickup_no}. Thank you.",
+     "मुनलाइट फ्रेट: पिकअप {pickup_no} का पार्सल संकलन भयो। धन्यवाद।"),
     ("sms_delivery_otp", "delivery.otp", "sms", None,
      "Your Moonlight Freight delivery code for {tracking_no} is {otp}. Share it only with the rider.",
      "{tracking_no} को डेलिभरी कोड {otp} हो। राइडरलाई मात्र दिनुहोस्।"),
@@ -455,7 +479,19 @@ TEMPLATE_VARIABLES = {
     "delivery.otp": ["tracking_no", "otp"],
     "cod.remitted": ["remittance_no", "net_payable"],
     "pickup.scheduled": ["pickup_no", "scheduled_date", "time_slot"],
+    "shipment.in_transit": ["tracking_no", "customer_name", "destination", "tracking_url"],
+    "shipment.returned": ["tracking_no", "customer_name", "origin", "destination",
+                          "tracking_url"],
+    "pickup.completed": ["pickup_no", "customer_name"],
 }
+
+#: Wording a native Nepali speaker should read before these are relied on.
+#: They are seeded active, but nothing is transmitted until
+#: NOTIFICATIONS_ENABLED is switched on, so there is time to review them in
+#: the notification log first.
+NEEDS_NATIVE_REVIEW = (
+    "sms_in_transit", "sms_returned", "sms_pickup_completed",
+)
 
 
 def seed_templates():
