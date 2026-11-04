@@ -11,6 +11,8 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.auth.utils import require_roles
 from app.extensions import db
 from app.models.shipment import Shipment
+from app.notifications.dispatch import (notify_shipment_created,
+                                        notify_status_change)
 from app.models.parcel import Parcel
 from app.models.tracking_event import TrackingEvent
 from app.shipment_status import (
@@ -336,6 +338,9 @@ class ShipmentList(Resource):
             description="Shipment created and awaiting pickup.",
         ))
         db.session.commit()
+        # After the commit: a customer must never be told about a booking
+        # that then failed to save.
+        notify_shipment_created(shipment)
         # to_dict rather than a marshal model: the marshal list predates the
         # logistics fields and would silently strip COD, districts, charges
         # and the status label from every response.
@@ -379,6 +384,7 @@ class ShipmentDetail(Resource):
                                f"'{status_label(shipment.status)}' to "
                                f"'{status_label(new_status)}'")
 
+        previous_status = shipment.status
         shipment.status = new_status
         if new_status == DELIVERED and not shipment.delivered_at:
             shipment.delivered_at = datetime.utcnow()
@@ -389,6 +395,7 @@ class ShipmentDetail(Resource):
             description=data.get("description", ""),
         ))
         db.session.commit()
+        notify_status_change(shipment, previous_status)
         return {"msg": "Status updated", "status": shipment.status,
                 "status_label": status_label(shipment.status),
                 "next_statuses": next_statuses(shipment.status),

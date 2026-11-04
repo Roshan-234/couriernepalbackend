@@ -8,6 +8,7 @@ from app.shipment_status import (DELIVERED, DELIVERY_ATTEMPTED, PICKED_UP,
                                   next_statuses)
 from app.auth.utils import require_roles
 from app.extensions import db
+from app.notifications.dispatch import notify_status_change
 from app.models.delivery import DeliveryAttempt, ProofOfDelivery
 from app.models.rider import Rider
 from app.models.shipment import Shipment
@@ -101,9 +102,15 @@ def _require_collected(shipment):
 
 
 def _move(shipment, target, description, location=None):
-    """Apply a status change and append the customer-visible timeline row."""
+    """Apply a status change and append the customer-visible timeline row.
+
+    Stashes the status being left so the handler can tell the customer once
+    its commit has gone through; notifying before the commit would announce
+    a delivery that then failed to save.
+    """
     if not can_transition(shipment.status, target):
         delivery_ns.abort(409, f"Cannot move a shipment from '{shipment.status}' to '{target}'")
+    shipment._notify_previous_status = shipment.status
     shipment.status = target
     db.session.add(TrackingEvent(
         shipment_id=shipment.id,
@@ -111,6 +118,13 @@ def _move(shipment, target, description, location=None):
         location=location or shipment.destination_district or shipment.destination or '',
         description=description,
     ))
+
+
+def _commit_and_notify(shipment):
+    """Commit, then tell the customer what just happened to their parcel."""
+    db.session.commit()
+    notify_status_change(shipment,
+                         getattr(shipment, "_notify_previous_status", None))
 
 
 @delivery_ns.route('/shipments/<int:id>/attempt')
@@ -164,7 +178,7 @@ class DeliveryAttemptCreate(Resource):
             except ValueError:
                 delivery_ns.abort(400, 'next_attempt_date must be an ISO date (YYYY-MM-DD)')
         db.session.add(attempt)
-        db.session.commit()
+        _commit_and_notify(shipment)
         # A failed attempt leaves the shipment at delivery_attempted, from
         # where operations can retry, hold, or start a return.
         return {"attempt": attempt.to_dict(), "shipment_status": shipment.status,
@@ -259,7 +273,7 @@ class ProofOfDeliveryCreate(Resource):
         shipment.delivered_at = proof.delivered_at
         if not shipment.delivery_attempt_count:
             shipment.delivery_attempt_count = 1
-        db.session.commit()
+        _commit_and_notify(shipment)
         return {"proof": proof.to_dict(), "shipment_status": shipment.status}, 201
 
 
@@ -277,5 +291,5 @@ class ReturnToOrigin(Resource):
         reason = text(data.get('rto_reason', ''), 'rto_reason', 255, required=True)
         _move(shipment, RTO_INITIATED, f'Return to sender started: {reason}')
         shipment.rto_reason = reason
-        db.session.commit()
+        _commit_and_notify(shipment)
         return {"shipment_id": shipment.id, "status": shipment.status, "rto_reason": shipment.rto_reason}

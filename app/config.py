@@ -15,6 +15,16 @@ class Config:
     BACKEND_PROXY_SECRET = os.getenv('BACKEND_PROXY_SECRET', '')
     TRUSTED_PROXY_HOPS = int(os.getenv('TRUSTED_PROXY_HOPS', '0'))
     AUTO_CREATE_SCHEMA = os.getenv('AUTO_CREATE_SCHEMA', 'true').lower() == 'true'
+
+    # Whether customer notifications actually leave the building.
+    #
+    # Off unless a deployment says otherwise, and that default is the point.
+    # Every notification is recorded either way, so the office can read the
+    # log and see exactly what would have gone to whom before anyone is
+    # mailed. MAIL_SERVER points at the company's real SMTP server and the
+    # customer list is twenty years old; wiring the lifecycle up and
+    # starting to send are two separate decisions.
+    NOTIFICATIONS_ENABLED = os.getenv('NOTIFICATIONS_ENABLED', 'false').lower() == 'true'
     RATELIMIT_DEFAULT = '300 per minute'
 
     #Mail Configuration

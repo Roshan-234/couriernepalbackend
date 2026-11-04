@@ -369,9 +369,21 @@ class NotificationLogs(Resource):
     def get(self):
         """Read the notification send log (admin, paginated).
 
-        Filters: ``user_id``, ``channel``, ``status``.
+        Filters: ``user_id``, ``channel``, ``status``, ``event``,
+        ``shipment_id``.
+
+        **This is the screen to read before switching sending on.** While
+        ``NOTIFICATIONS_ENABLED`` is off every message is recorded and
+        suppressed, so this log is a dry run of the whole programme: who
+        would have been written to, about what, and in which words. The
+        ``summary`` counts how many of each outcome there are.
         """
         from flask import request
+        from sqlalchemy import func
+
+        # Imported here, not at module scope: dispatch imports
+        # send_sms from this module.
+        from app.notifications.dispatch import sending_enabled
 
         page, per_page = pagination()
         query = NotificationLog.query
@@ -380,24 +392,33 @@ class NotificationLogs(Resource):
                 query = query.filter_by(user_id=int(request.args["user_id"]))
             except ValueError:
                 notification_ns.abort(400, "'user_id' must be an integer")
+        if request.args.get("shipment_id"):
+            try:
+                query = query.filter_by(shipment_id=int(request.args["shipment_id"]))
+            except ValueError:
+                notification_ns.abort(400, "'shipment_id' must be an integer")
         if request.args.get("channel"):
             query = query.filter_by(channel=request.args["channel"])
         if request.args.get("status"):
             query = query.filter_by(status=request.args["status"])
+        if request.args.get("event"):
+            query = query.filter_by(event=request.args["event"])
 
         paginated = (query.order_by(NotificationLog.sent_at.desc(), NotificationLog.id.desc())
                      .paginate(page=page, per_page=per_page, error_out=False))
         return {
-            "logs": [{
-                "id": log.id,
-                "user_id": log.user_id,
-                "channel": log.channel,
-                "payload": log.payload,
-                "status": log.status,
-                "sent_at": log.sent_at.isoformat() if log.sent_at else None,
-            } for log in paginated.items],
+            # to_dict rather than a hand-built shape: this listing silently
+            # dropped every field added with the dispatcher, so an operator
+            # could not see who had been written to or about what.
+            "logs": [dict(log.to_dict(), payload=log.payload)
+                     for log in paginated.items],
             "total": paginated.total,
             "page": paginated.page,
             "pages": paginated.pages,
             "per_page": per_page,
+            "sending_enabled": sending_enabled(),
+            "summary": {status: count for status, count in
+                        db.session.query(NotificationLog.status,
+                                         func.count(NotificationLog.id))
+                        .group_by(NotificationLog.status).all()},
         }

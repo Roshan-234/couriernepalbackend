@@ -5,6 +5,7 @@ from flask_jwt_extended import jwt_required
 from app.models.tracking_event import TrackingEvent
 from app.models.shipment import Shipment
 from app.extensions import db
+from app.notifications.dispatch import notify_status_change
 from app.auth.utils import require_roles
 
 tracking_ns = Namespace('tracking', description='Tracking operations')
@@ -88,7 +89,9 @@ class TrackingEventList(Resource):
             location=data.get('location', ''),
             description=data.get('description', ''),
         )
+        previous_status = shipment.status
         shipment.status = target
         db.session.add(event)
         db.session.commit()
+        notify_status_change(shipment, previous_status)
         return event, 201
