@@ -7,6 +7,14 @@ from app.auth.utils import validate_password_strength
 
 
 def register_commands(app):
+    # Commands that live with their own module rather than here.
+    from app.analytics.commands import register_analytics_commands
+    from app.privacy_requests.commands import register_privacy_commands
+    from app.advertising.commands import register_advertising_commands
+    register_analytics_commands(app)
+    register_privacy_commands(app)
+    register_advertising_commands(app)
+
     @app.cli.command('seed-content')
     def seed_content_command():
         from app.models import seed_roles
@@ -25,6 +33,21 @@ def register_commands(app):
         seed_all()
         click.echo('Done. Carrier connectors and payment gateways are inactive '
                    'until credentials are entered and each one is switched on.')
+
+    @app.cli.command('seed-privacy-pages')
+    @click.option('--force', is_flag=True,
+                  help='Replace the pages even where an administrator has edited them')
+    def seed_privacy_pages_command(force):
+        """Publish the privacy, cookie and data-request pages.
+
+        The pre-existing /privacy page described Google Analytics and a
+        browser-local consent flag, neither of which the site still uses, so
+        that one is replaced when it is untouched. Administrator edits are
+        preserved unless --force says otherwise.
+        """
+        from app.content.privacy_pages import seed_privacy_pages
+        for path, outcome in seed_privacy_pages(force=force).items():
+            click.echo(f'  {path}: {outcome}')
 
     @app.cli.command('schema-check')
     def schema_check():

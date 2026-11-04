@@ -34,6 +34,12 @@ def register_models():
     from .webhook import WebhookEndpoint, WebhookDelivery
     from .notification_template import NotificationTemplate, SmsProvider
     from .claim import Claim, AddressBookEntry
+    # Privacy, analytics, advertising and marketing
+    from .consent import ConsentRecord
+    from .privacy import DataRequest, RetentionRule
+    from .analytics import AnalyticsEvent, AnalyticsDaily
+    from .advertising import AdCampaign, AdPlacement, AdCreative, SiteNotice
+    from .marketing import MarketingContact, EmailCampaign, EmailSend
 
 def seed_roles():
     """Ensure default roles, services, and FAQs exist in the database."""
@@ -55,6 +61,11 @@ def seed_roles():
     db.session.commit()
     from app.content.seed import seed_content
     seed_content()
+    # The privacy, cookie and data-request pages describe how the software
+    # behaves, so they ship with it rather than being written by hand. The
+    # call preserves administrator edits; see app/content/privacy_pages.py.
+    from app.content.privacy_pages import seed_privacy_pages
+    seed_privacy_pages()
     # Demo rates/claims must never be enabled automatically in production.
     from flask import current_app
     if current_app.testing:

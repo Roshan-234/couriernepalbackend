@@ -7,6 +7,36 @@ from app.net import client_ip
 # Paths to never log (to avoid infinite loops or noise)
 SKIP_PATHS = ["/api/docs", "/api/health", "/static", "/favicon", "/api/swagger", "/api/content/pages", "/api/content/page"]
 
+#: Public telemetry hit once or more on every page view: the analytics
+#: beacon, advert serving and the impression and click counters.
+#:
+#: These are skipped for two reasons, and the second is the one that matters.
+#: An audit row per beacon grows this table in proportion to *visitors*
+#: rather than to administrative actions, burying the sign-ins and record
+#: changes it exists to record. And the row would carry `client_ip()` — the
+#: visitor's real address — alongside an analytics row that deliberately
+#: stores only a salted hash, which quietly undoes that whole design and
+#: contradicts what the published privacy page tells people.
+#:
+#: Anything added here must be genuinely high-volume, public and read-only
+#: or a counter. An endpoint that changes a record belongs in the log.
+HIGH_VOLUME_PATHS = (
+    "/api/analytics/collect",
+    "/api/ads/serve",
+    "/api/ads/notices",
+    "/api/ads/impression",
+    "/api/ads/click",
+)
+
+#: Reads that every page performs, matched exactly rather than by prefix so
+#: that the administrative endpoints underneath the same namespace — the
+#: consent log and its summary — keep being audited. The *writes* on these
+#: paths are real decisions by a person and are audited too; only the
+#: polling is dropped.
+POLLED_READ_PATHS = frozenset({
+    "/api/consent", "/api/consent/", "/api/consent/policy",
+})
+
 
 def _derive_action(method, path):
     m = method.upper()
@@ -58,6 +88,10 @@ def audit_request(response):
         if any(skip in path for skip in SKIP_PATHS):
             return response
         if not path.startswith("/api"):
+            return response
+        if any(path.startswith(prefix) for prefix in HIGH_VOLUME_PATHS):
+            return response
+        if request.method in ("GET", "HEAD") and path in POLLED_READ_PATHS:
             return response
         # Traffic the edge turned away never reached the application, and this
         # hook runs before the rate limiter does. Logging it would let anyone

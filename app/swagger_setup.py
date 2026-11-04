@@ -36,6 +36,12 @@ from app.webhooks.routes import webhook_ns
 from app.notifications.routes import notification_ns
 from app.claims.routes import claim_ns
 from app.geo.routes import geo_ns
+# Privacy, analytics, advertising and marketing
+from app.consent.routes import consent_ns
+from app.analytics.routes import analytics_ns
+from app.marketing.routes import marketing_ns
+from app.privacy_requests.routes import privacy_ns
+from app.advertising.routes import ads_ns
 
 def init_swagger(app):
     """Initialize Swagger documentation."""
@@ -69,6 +75,11 @@ def init_swagger(app):
     api.add_namespace(notification_ns, path='/api/notifications')
     api.add_namespace(claim_ns, path='/api/claims')
     api.add_namespace(geo_ns, path='/api/geo')
+    api.add_namespace(consent_ns, path='/api/consent')
+    api.add_namespace(analytics_ns, path='/api/analytics')
+    api.add_namespace(marketing_ns, path='/api/marketing')
+    api.add_namespace(privacy_ns, path='/api/privacy')
+    api.add_namespace(ads_ns, path='/api/ads')
 
     # Register all Swagger definitions
     register_swagger_definitions()
