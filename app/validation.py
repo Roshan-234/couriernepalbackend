@@ -156,7 +156,10 @@ def document_data(data, user_id, kind):
             raise BadRequest('Invalid document status')
         if kind == 'invoice' and data['status'] in ('paid', 'issued') and not user.is_admin:
             raise Forbidden('Only administrators may issue or mark invoices paid')
-    for key in ('discount', 'tax_percentage', 'shipping_charge', 'total_packages'):
+    # fx_rate and total_npr come from the freight bill: the rate agreed on
+    # the day, and the rupee figure the customer settles.
+    for key in ('discount', 'tax_percentage', 'shipping_charge', 'total_packages',
+                'fx_rate', 'total_npr'):
         if key in data:
             number(data[key], key)
     if data.get('tax_percentage', 0) > 100:

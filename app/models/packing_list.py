@@ -41,7 +41,37 @@ class PackingList(db.Model):
     receiver_phone  = db.Column(db.String(50))
     receiver_country= db.Column(db.String(100))
 
-    # Cargo items (JSON array)
+    sender_email    = db.Column(db.String(200))
+
+    # ── Fields the company's own packing list carries ────────────────────
+    #
+    # Taken from the format the office has used for years. Two things in it
+    # are not obvious from a generic packing list and are worth naming:
+    #
+    # The header is the **exporter's**, not the freight company's. A packing
+    # list is issued on behalf of the shipper -- "EXAMPLE EXPORTS", with their
+    # own P.O. box, telephone and email -- because it is their declaration of
+    # what is in the cartons. Moonlight's details do not appear on it.
+    #
+    # Items are grouped into boxes. Each item carries an optional ``box``
+    # label ("BOX NO:01"), the document prints a heading row per box, and the
+    # quantity column totals across all of them. Customs and the receiving
+    # agent both work carton by carton, so a flat list is the wrong shape.
+
+    #: The exporter's own invoice reference, printed as "INV NO:-VE/01/2008".
+    #: Theirs, not ours; it ties the packing list to their commercial invoice.
+    invoice_no      = db.Column(db.String(60))
+    mode_of_shipment = db.Column(db.String(40), default='BY-AIR')
+    #: The one-line description above the item table, e.g.
+    #: "NEPALESE COTTON & HANDICRAFT GOODS".
+    goods_summary   = db.Column(db.String(255))
+    #: Printed once in the quantity column header rather than on every row.
+    quantity_unit   = db.Column(db.String(20), default='PCS')
+    #: The signature line: "For: Example Exports." Defaults to the sender.
+    signed_for      = db.Column(db.String(200))
+
+    # Cargo items (JSON array). Each may carry "box", "cms" and "remarks"
+    # alongside the fields documented at the top of this module.
     items           = db.Column(db.JSON, nullable=False, default=list)
 
     # Totals (denormalised for fast display)
@@ -86,6 +116,12 @@ class PackingList(db.Model):
             "receiver_phone":   self.receiver_phone,
             "receiver_country": self.receiver_country,
             "items":            self.items or [],
+            "sender_email":     self.sender_email,
+            "invoice_no":       self.invoice_no,
+            "mode_of_shipment": self.mode_of_shipment,
+            "goods_summary":    self.goods_summary,
+            "quantity_unit":    self.quantity_unit,
+            "signed_for":       self.signed_for,
             "total_packages":   self.total_packages,
             "total_weight_kg":  self.total_weight_kg,
             "total_items":      self.total_items,

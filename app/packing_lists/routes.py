@@ -75,6 +75,12 @@ class PackingListList(Resource):
             sender_address  = data.get("sender_address", ""),
             sender_phone    = data.get("sender_phone", ""),
             sender_country  = data.get("sender_country", "Nepal"),
+            sender_email    = data.get("sender_email", ""),
+            invoice_no      = data.get("invoice_no", ""),
+            mode_of_shipment= data.get("mode_of_shipment", "BY-AIR"),
+            goods_summary   = data.get("goods_summary", ""),
+            quantity_unit   = data.get("quantity_unit", "PCS"),
+            signed_for      = data.get("signed_for", ""),
             receiver_name   = data.get("receiver_name", "").strip(),
             receiver_address= data.get("receiver_address", ""),
             receiver_phone  = data.get("receiver_phone", ""),
@@ -141,6 +147,8 @@ class PackingListDetail(Resource):
             "sender_name","sender_address","sender_phone","sender_country",
             "receiver_name","receiver_address","receiver_phone","receiver_country",
             "items","notes","total_packages","status","shipment_id",
+            "sender_email","invoice_no","mode_of_shipment","goods_summary",
+            "quantity_unit","signed_for",
         ]
         for field in updatable:
             if field in data:
@@ -182,7 +190,7 @@ class PackingListGenerate(Resource):
         if not _own_or_admin(pl, user):
             pl_ns.abort(403, "Access denied")
 
-        from app.utils.excel import generate_packing_list_excel
+        from app.utils.house_format import generate_packing_list_excel
         storage = _storage_dir()
         fpath, fname = generate_packing_list_excel(pl, storage)
         pl.file_path = fpath

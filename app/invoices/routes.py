@@ -104,6 +104,12 @@ class InvoiceList(Resource):
             packing_list_id  = data.get("packing_list_id"),
             created_by       = uid,
             seller_name      = data.get("seller_name", "").strip(),
+            seller_email     = data.get("seller_email", ""),
+            awb_no           = data.get("awb_no", ""),
+            account_name     = data.get("account_name", ""),
+            fx_rate          = data.get("fx_rate"),
+            total_npr        = data.get("total_npr"),
+            amount_in_words  = data.get("amount_in_words", ""),
             seller_address   = data.get("seller_address", ""),
             seller_phone     = data.get("seller_phone", ""),
             seller_country   = data.get("seller_country", "Nepal"),
@@ -175,6 +181,8 @@ class InvoiceDetail(Resource):
         data = document_data(json_object(), uid, "invoice")
         updatable = [
             "seller_name","seller_address","seller_phone","seller_country","seller_tin",
+            "seller_email","awb_no","account_name","fx_rate","total_npr",
+            "amount_in_words",
             "buyer_name","buyer_address","buyer_phone","buyer_country","buyer_tin",
             "items","currency","payment_terms","incoterms","port_of_loading",
             "port_of_discharge","notes","status","shipment_id","packing_list_id",
@@ -222,7 +230,7 @@ class InvoiceGenerate(Resource):
         if not _own_or_admin(inv, user):
             inv_ns.abort(403, "Access denied")
 
-        from app.utils.excel import generate_invoice_excel
+        from app.utils.house_format import generate_invoice_excel
         storage = _storage_dir()
         fpath, fname = generate_invoice_excel(inv, storage)
         inv.file_path = fpath

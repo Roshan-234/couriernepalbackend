@@ -36,6 +36,7 @@ class Invoice(db.Model):
     seller_phone     = db.Column(db.String(50))
     seller_country   = db.Column(db.String(100), default='Nepal')
     seller_tin       = db.Column(db.String(100))   # Tax / VAT number
+    seller_email     = db.Column(db.String(200))
 
     # Buyer (importer)
     buyer_name       = db.Column(db.String(200), nullable=False)
@@ -55,6 +56,31 @@ class Invoice(db.Model):
     tax_amount       = db.Column(db.Float, default=0.0)
     shipping_charge  = db.Column(db.Float, default=0.0)
     total_amount     = db.Column(db.Float, default=0.0)
+
+    # ── Fields the company's own freight bill carries ────────────────────
+    #
+    # The document the office actually issues is a **freight bill**, not a
+    # commercial invoice for goods. It charges for carriage -- "Air freight
+    # charge 45kgs x 3.20 = $144.00", "awb fee + insurance fee = $17.75" --
+    # totals in US dollars, converts at the rate agreed that day, and settles
+    # in rupees. The seller/buyer fields above describe a goods invoice,
+    # which is a different document used at customs; both exist because the
+    # company issues both.
+
+    #: Air waybill number, printed beside the date with its own day/month/
+    #: year columns, which is how the office files them.
+    awb_no           = db.Column(db.String(60))
+    #: The agent or account the shipment was booked through, printed top
+    #: right, e.g. "Acme Packers & Movers P. Ltd.".
+    account_name     = db.Column(db.String(200))
+    #: USD to NPR on the day the bill was raised. Stored rather than looked
+    #: up, because the bill is a record of what was charged, not of today.
+    fx_rate          = db.Column(db.Float)
+    #: The rupee figure the customer settles.
+    total_npr        = db.Column(db.Float)
+    #: "In words: Twelve thousand two hundred forty five only." Generated,
+    #: but stored so a reprint matches the original exactly.
+    amount_in_words  = db.Column(db.String(300))
 
     # Terms
     payment_terms    = db.Column(db.String(100), default='Prepaid')
@@ -103,6 +129,12 @@ class Invoice(db.Model):
             "buyer_country":    self.buyer_country,
             "buyer_tin":        self.buyer_tin,
             "items":            self.items or [],
+            "seller_email":     self.seller_email,
+            "awb_no":           self.awb_no,
+            "account_name":     self.account_name,
+            "fx_rate":          self.fx_rate,
+            "total_npr":        self.total_npr,
+            "amount_in_words":  self.amount_in_words,
             "currency":         self.currency,
             "subtotal":         self.subtotal,
             "discount":         self.discount,
