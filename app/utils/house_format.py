@@ -156,21 +156,32 @@ def generate_packing_list_excel(pl, storage_dir):
 
     # Exporter letterhead. Theirs, not ours -- see the module docstring.
     _put(sheet, 1, 1, pl.sender_name, font=COMPANY)
-    _put(sheet, 2, 1, pl.sender_address or "")
+    # Split on newlines like the consignee block below. Written into one
+    # cell with wrapping off, a two-line shipper address simply ran out of
+    # sight at the edge of the column.
+    header_row = 2
+    for line in (pl.sender_address or "").splitlines():
+        if line.strip():
+            _put(sheet, header_row, 1, line.strip())
+            header_row += 1
     if pl.sender_phone:
-        _put(sheet, 3, 1, f"TEL:-{pl.sender_phone}")
+        _put(sheet, header_row, 1, f"TEL:-{pl.sender_phone}")
+        header_row += 1
     if getattr(pl, "sender_email", None):
-        _put(sheet, 4, 1, f"Email:{pl.sender_email}")
+        _put(sheet, header_row, 1, f"Email:{pl.sender_email}")
+        header_row += 1
 
-    _put(sheet, 6, 1, "SHIPPED TO:", font=BOLD)
+    shipped_to = max(header_row + 1, 6)
+    _put(sheet, shipped_to, 1, "SHIPPED TO:", font=BOLD)
     if pl.invoice_no:
-        _put(sheet, 6, 3, f"INV NO:-{pl.invoice_no}")
-    _put(sheet, 7, 2, pl.receiver_name, font=BOLD)
-    _put(sheet, 7, 3, f"DATE:-{_date(pl.created_at)}")
-    _put(sheet, 8, 3, f"Mode of Shipment:-{pl.mode_of_shipment or 'BY-AIR'}")
+        _put(sheet, shipped_to, 3, f"INV NO:-{pl.invoice_no}")
+    _put(sheet, shipped_to + 1, 2, pl.receiver_name, font=BOLD)
+    _put(sheet, shipped_to + 1, 3, f"DATE:-{_date(pl.created_at)}")
+    _put(sheet, shipped_to + 2, 3,
+         f"Mode of Shipment:-{pl.mode_of_shipment or 'BY-AIR'}")
 
     # The consignee address runs down column B, one line per line entered.
-    row = 8
+    row = shipped_to + 2
     for line in (pl.receiver_address or "").splitlines():
         if line.strip():
             _put(sheet, row, 2, line.strip())
@@ -218,7 +229,12 @@ def generate_packing_list_excel(pl, storage_dir):
     _put(sheet, row, 2, "TOTAL", font=BOLD, border=UNDERLINE)
     _put(sheet, row, 4, total_quantity, font=BOLD, align=CENTRE, border=UNDERLINE)
 
-    _put(sheet, row + 6, 3, f"For: {pl.signed_for or pl.sender_name}.")
+    # "HIMALAYAN CRAFT EXPORTS PVT. LTD." already ends in a full stop, and
+    # appending another gave "PVT. LTD..".
+    signature = (pl.signed_for or pl.sender_name or "").strip()
+    if signature and not signature.endswith("."):
+        signature += "."
+    _put(sheet, row + 6, 3, f"For: {signature}")
 
     name = f"PACKING-LIST-{_sanitize(pl.pl_number)}.xlsx"
     path = os.path.abspath(os.path.join(storage_dir, name))

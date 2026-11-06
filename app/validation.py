@@ -176,9 +176,25 @@ def document_data(data, user_id, kind):
                 raise BadRequest('Item quantity must be a non-negative integer')
             unit_key, total_key = ('unit_price', 'total_price') if kind == 'invoice' else ('unit_weight_kg', 'total_weight_kg')
             unit = number(item.get(unit_key, 0), unit_key)
-            number(item.get(total_key, unit * quantity), total_key)
-            # Derive totals consistently, rather than trusting client calculations.
-            item[total_key] = round(unit * quantity, 2 if kind == 'invoice' else 3)
+            places = 2 if kind == 'invoice' else 3
+            supplied_total = item.get(total_key)
+
+            if quantity or unit:
+                # An itemised line: derive the total rather than trusting the
+                # client's arithmetic, which is the point of this function.
+                number(supplied_total if supplied_total is not None else unit * quantity,
+                       total_key)
+                item[total_key] = round(unit * quantity, places)
+            elif supplied_total not in (None, ''):
+                # A lump-sum line. A freight bill charges "Air freight charge
+                # 45kgs x 3.20 = $144.00" as one amount: the arithmetic is in
+                # the description, and there is no quantity or unit price to
+                # multiply. Forcing those lines through quantity x unit_price
+                # silently stored every charge as zero, which is the worst
+                # possible way for a money field to be wrong.
+                item[total_key] = round(number(supplied_total, total_key), places)
+            else:
+                item[total_key] = 0
     for key, value in data.items():
         if key.endswith(('_name', '_address', '_country', '_phone', '_tin')) or key in ('notes', 'currency', 'payment_terms', 'incoterms'):
             data[key] = text(value, key, 5000 if key.endswith('_address') or key == 'notes' else 200)

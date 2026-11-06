@@ -305,3 +305,125 @@ def test_the_file_is_named_after_the_document(app, packing_list, output_dir):
         path, name = generate_packing_list_excel(record, output_dir)
     assert name == "PACKING-LIST-PL-HOUSE-1.xlsx"
     assert os.path.isfile(path)
+
+
+# ── Defects found when the admin screens were first wired up ────────────────
+
+def test_a_lump_sum_charge_line_keeps_its_amount(app, admin_token, client):
+    """The money bug.
+
+    `document_data` derived every total as quantity x unit_price and
+    discarded what was sent. A freight bill charges "Air freight charge
+    45kgs x 3.20 = $144.00" as one amount -- the arithmetic is in the
+    description -- so every charge line was being stored as zero.
+    """
+    from app.validation import document_data
+    from app.models.user import User
+
+    with app.app_context():
+        uid = User.query.first().id
+        cleaned = document_data(
+            {"items": [{"description": "Air freight charge 45kgs x 3.20",
+                        "total_price": 144.00}]},
+            uid, "invoice")
+        assert cleaned["items"][0]["total_price"] == 144.00
+
+
+def test_an_itemised_line_is_still_derived_not_trusted(app, admin_token):
+    """The original protection stays: a client cannot post its own total."""
+    from app.validation import document_data
+    from app.models.user import User
+
+    with app.app_context():
+        uid = User.query.first().id
+        cleaned = document_data(
+            {"items": [{"description": "Shawls", "quantity": 10,
+                        "unit_price": 5.0, "total_price": 999999.0}]},
+            uid, "invoice")
+        assert cleaned["items"][0]["total_price"] == 50.0
+
+
+def test_a_line_with_nothing_priced_is_zero_not_an_error(app, admin_token):
+    from app.validation import document_data
+    from app.models.user import User
+
+    with app.app_context():
+        uid = User.query.first().id
+        cleaned = document_data({"items": [{"description": "To follow"}]},
+                                uid, "invoice")
+        assert cleaned["items"][0]["total_price"] == 0
+
+
+def test_a_packing_list_line_weight_behaves_the_same_way(app, admin_token):
+    from app.validation import document_data
+    from app.models.user import User
+
+    with app.app_context():
+        uid = User.query.first().id
+        cleaned = document_data(
+            {"items": [{"description": "Carton", "total_weight_kg": 12.5}]},
+            uid, "packing")
+        assert cleaned["items"][0]["total_weight_kg"] == 12.5
+
+
+def test_the_carton_count_means_cartons(app):
+    """It defaulted to the number of line items, so a twelve-line list read
+    as twelve boxes on the paperwork."""
+    from app.packing_lists.routes import _carton_count
+
+    assert _carton_count([{"box": "BOX NO:01"}, {"box": "BOX NO:01"},
+                          {"box": "BOX NO:02"}]) == 2
+    assert _carton_count([{"description": "unlabelled"},
+                          {"description": "also unlabelled"}]) == 1
+    assert _carton_count([]) == 0
+
+
+def test_the_signature_does_not_double_the_full_stop(app, admin_token, output_dir):
+    """"PVT. LTD." already ends in one."""
+    with app.app_context():
+        from app.models.user import User
+        existing = PackingList.query.filter_by(pl_number="PL-HOUSE-DOT").first()
+        record = existing or PackingList(
+            pl_number="PL-HOUSE-DOT", created_by=User.query.first().id,
+            sender_name="EXAMPLE CRAFT EXPORTS PVT. LTD.",
+            receiver_name="A CONSIGNEE",
+            items=[{"description": "A THING", "quantity": 1}],
+        )
+        if existing is None:
+            db.session.add(record)
+            db.session.commit()
+        path, _ = generate_packing_list_excel(record, output_dir)
+
+    text = " ".join(str(c.value) for row in _sheet(path).iter_rows()
+                    for c in row if c.value)
+    assert "PVT. LTD.." not in text
+    assert "For: EXAMPLE CRAFT EXPORTS PVT. LTD." in text
+
+
+def test_a_multi_line_shipper_address_is_split_down_the_column(
+        app, admin_token, output_dir):
+    """It was written into one cell with wrapping off, so a second line
+    simply ran out of sight at the edge of the column."""
+    with app.app_context():
+        from app.models.user import User
+        existing = PackingList.query.filter_by(pl_number="PL-HOUSE-ADDR").first()
+        record = existing or PackingList(
+            pl_number="PL-HOUSE-ADDR", created_by=User.query.first().id,
+            sender_name="AN EXPORTER",
+            sender_address="P.O.BOX NO:1234\nTHAMEL, KATHMANDU\nNEPAL",
+            receiver_name="A CONSIGNEE",
+            items=[{"description": "A THING", "quantity": 1}],
+        )
+        if existing is None:
+            db.session.add(record)
+            db.session.commit()
+        path, _ = generate_packing_list_excel(record, output_dir)
+
+    column = _column(_sheet(path), "A")
+    assert "P.O.BOX NO:1234" in column
+    assert "THAMEL, KATHMANDU" in column
+    assert "NEPAL" in column
+    # And the document below the letterhead still assembles.
+    text = " ".join(str(c.value) for row in _sheet(path).iter_rows()
+                    for c in row if c.value)
+    assert "SHIPPED TO:" in text and "PACKING-LIST" in text

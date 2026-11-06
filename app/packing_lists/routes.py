@@ -24,6 +24,17 @@ from app.models.user import User
 pl_ns = Namespace("packing-lists", description="Packing Lists")
 
 
+def _carton_count(items):
+    """How many cartons a list describes.
+
+    The number of distinct box labels, or one carton when nothing is
+    labelled -- an unlabelled list is still a shipment of something.
+    """
+    labels = {(item.get("box") or "").strip() for item in items or []}
+    labelled = {label for label in labels if label}
+    return len(labelled) or (1 if items else 0)
+
+
 def _storage_dir():
     return os.path.join(current_app.root_path, "..", "storage")
 
@@ -86,7 +97,9 @@ class PackingListList(Resource):
             receiver_phone  = data.get("receiver_phone", ""),
             receiver_country= data.get("receiver_country", ""),
             items           = items,
-            total_packages  = data.get("total_packages", len(items)),
+            # Cartons, not line items. Defaulting to len(items) made a
+            # twelve-line list read as twelve boxes on the paperwork.
+            total_packages  = data.get("total_packages", _carton_count(items)),
             total_weight_kg = round(total_wt, 3),
             total_items     = total_qty,
             notes           = data.get("notes", ""),
