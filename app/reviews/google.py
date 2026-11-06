@@ -139,7 +139,12 @@ def cached():
     config = current_app.config
     place_id = config.get("GOOGLE_PLACE_ID")
     if not place_id:
-        return {"configured": False, "reviews": [], "place": None}
+        # The same four keys as the configured path. The early return used
+        # to omit `stale` and `attribution`, so a caller had to handle two
+        # shapes for one endpoint -- and the shape it got was the one it
+        # sees every day until the owner supplies a key.
+        return {"configured": False, "place": None, "reviews": [],
+                "stale": True, "attribution": "Reviews from Google"}
 
     place = PlaceRating.query.filter_by(place_id=place_id).first()
     reviews = (GoogleReview.query.filter_by(place_id=place_id)

@@ -431,3 +431,23 @@ def test_the_listing_can_be_filtered_to_verified_customers(visitor, app, admin_t
     body = visitor.get("/api/reviews/", query_string={"verified": "true"}).get_json()
     assert body["total"] == 1
     assert body["items"][0]["is_verified_customer"] is True
+
+
+def test_the_google_endpoint_always_returns_the_same_shape(visitor, app):
+    """One endpoint, one shape.
+
+    The unconfigured path returned three keys and the configured path
+    five, so a caller had to handle both -- and the three-key one is what
+    it sees every day until a key is supplied.
+    """
+    unconfigured = visitor.get("/api/reviews/google").get_json()
+
+    with app.app_context():
+        app.config["GOOGLE_PLACE_ID"] = "test-place"
+        db.session.add(PlaceRating(place_id="test-place", rating=4.6))
+        db.session.commit()
+    configured = visitor.get("/api/reviews/google").get_json()
+
+    assert set(unconfigured) == set(configured)
+    assert {"configured", "place", "reviews", "stale", "attribution"} <= set(unconfigured)
+    assert unconfigured["attribution"] == configured["attribution"]
