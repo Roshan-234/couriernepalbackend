@@ -34,6 +34,52 @@ def register_commands(app):
         click.echo('Done. Carrier connectors and payment gateways are inactive '
                    'until credentials are entered and each one is switched on.')
 
+    @app.cli.command('seed-demo-documents')
+    def seed_demo_documents_command():
+        """Create example reviews, a packing list and a freight bill.
+
+        For looking at, not for using. Reviews are flagged `is_demo` and
+        can never reach the public listing or the average rating; the two
+        documents are prefixed DEMO-. Refuses to run in production.
+        """
+        from app.data.seed_demo_documents import seed_demo_documents
+        result = seed_demo_documents()
+        click.echo(f"Reviews:       {result['reviews']} created (demo, never published)")
+        click.echo(f"Packing lists: {result['packing_lists']} created")
+        click.echo(f"Freight bills: {result['freight_bills']} created")
+        click.echo("Generate the Excel files from the admin screens, or with "
+                   "flask render-demo-documents.")
+
+    @app.cli.command('render-demo-documents')
+    def render_demo_documents_command():
+        """Write the demo packing list and freight bill out as Excel.
+
+        Shows what the new format produces without anyone having to click
+        through the admin screens.
+        """
+        import os
+        from app.models.invoice import Invoice
+        from app.models.packing_list import PackingList
+        from app.utils.house_format import (generate_invoice_excel,
+                                            generate_packing_list_excel)
+
+        directory = os.path.abspath(
+            os.path.join(app.root_path, '..', 'storage', 'demo_documents'))
+        os.makedirs(directory, exist_ok=True)
+
+        pl = PackingList.query.filter_by(pl_number='DEMO-PL-0001').first()
+        bill = Invoice.query.filter_by(invoice_number='DEMO-BILL-0001').first()
+        if not pl or not bill:
+            raise click.ClickException('Run flask seed-demo-documents first')
+
+        for record, render in ((pl, generate_packing_list_excel),
+                               (bill, generate_invoice_excel)):
+            path, name = render(record, directory)
+            record.file_path, record.file_name = path, name
+            click.echo(f'  {name}')
+        db.session.commit()
+        click.echo(f'Written to {directory}')
+
     @app.cli.command('seed-faqs')
     def seed_faqs_command():
         """Publish the FAQ set.

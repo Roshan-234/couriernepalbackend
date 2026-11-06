@@ -42,6 +42,7 @@ from app.analytics.routes import analytics_ns
 from app.marketing.routes import marketing_ns
 from app.privacy_requests.routes import privacy_ns
 from app.advertising.routes import ads_ns
+from app.reviews.routes import review_ns
 
 def init_swagger(app):
     """Initialize Swagger documentation."""
@@ -80,6 +81,7 @@ def init_swagger(app):
     api.add_namespace(marketing_ns, path='/api/marketing')
     api.add_namespace(privacy_ns, path='/api/privacy')
     api.add_namespace(ads_ns, path='/api/ads')
+    api.add_namespace(review_ns, path='/api/reviews')
 
     # Register all Swagger definitions
     register_swagger_definitions()

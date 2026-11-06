@@ -40,6 +40,7 @@ def register_models():
     from .analytics import AnalyticsEvent, AnalyticsDaily
     from .advertising import AdCampaign, AdPlacement, AdCreative, SiteNotice
     from .marketing import MarketingContact, EmailCampaign, EmailSend
+    from .review import Review, GoogleReview, PlaceRating
 
 def seed_roles():
     """Ensure default roles, services, and FAQs exist in the database."""

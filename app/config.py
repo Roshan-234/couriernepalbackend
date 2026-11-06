@@ -13,6 +13,13 @@ class Config:
     # out for delivery before a named rider is assigned, and "Rider: ," is
     # not something to send a customer.
     COMPANY_PHONE = os.getenv("COMPANY_PHONE", "+977 1-5922458")
+
+    # Google Places, for showing the company's Google reviews. Without
+    # both of these the connector makes no request and the site shows no
+    # Google section at all, which is the correct state until the owner
+    # supplies them. The API bills per call, so results are cached.
+    GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    GOOGLE_PLACE_ID = os.getenv("GOOGLE_PLACE_ID", "")
     MAX_CONTENT_LENGTH = 2 * 1024 * 1024
     SECRET_KEY = os.getenv("SECRET_KEY")
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
