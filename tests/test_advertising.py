@@ -283,12 +283,36 @@ def test_serve_localises_to_nepali_and_falls_back_to_english(client, admin, publ
     assert item["body"] == "English body only"
 
 
-def test_serve_is_not_shared_cacheable(client, admin, public):
-    """The answer depends on a header no cache keys on."""
+def test_serve_declares_what_a_cache_must_key_on(client, admin, public):
+    """Adverts vary by country, and a cache has to be told so.
+
+    This originally asserted `no-store`, on the reasoning that the answer
+    depends on a header no cache keys on. The reasoning was right and the
+    conclusion has been overtaken: the public site is static HTML now, and
+    calling Flask for the advert slots on every page view was waking a
+    Python process to serve a constant. The answer is to key the cache
+    correctly rather than to refuse caching — so the response is cacheable
+    and carries `Vary: CF-IPCountry`, which is the header that actually
+    decides what comes back.
+    """
     slot = _placement(client, admin)
     _live_campaign(client, admin)
     result = public.get(f"{BASE}/serve?path=/&placement={slot['code']}")
-    assert "no-store" in result.headers.get("Cache-Control", "")
+
+    assert "no-store" not in result.headers.get("Cache-Control", "")
+    assert "CF-IPCountry" in result.headers.get("Vary", ""), (
+        "without this a shared cache would serve one country's adverts to "
+        "another")
+
+
+def test_serve_is_not_cached_for_a_signed_in_caller(client, admin, public):
+    """Whatever is cacheable for the public is not cacheable for somebody
+    whose request might have been answered differently."""
+    slot = _placement(client, admin)
+    _live_campaign(client, admin)
+    result = client.get(f"{BASE}/serve?path=/&placement={slot['code']}",
+                        headers=admin)
+    assert result.headers.get("Cache-Control") == "no-store"
 
 
 # ── Alt text ─────────────────────────────────────────────────────────────────

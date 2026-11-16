@@ -53,6 +53,12 @@ class Config:
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     RATELIMIT_STORAGE_URI = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
+
+    # Acknowledges that this deployment runs as a single process and so may
+    # keep rate-limit counters in memory. Only true on a host with no Redis
+    # or memcached -- a shared cPanel plan, typically -- and only correct
+    # while the worker count stays at 1. See validate_production.
+    RATELIMIT_SINGLE_WORKER = os.getenv('RATELIMIT_SINGLE_WORKER', 'false').lower() == 'true'
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
 

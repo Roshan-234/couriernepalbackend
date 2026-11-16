@@ -14,8 +14,26 @@ def validate_production(config):
         raise RuntimeError('Production requires configured MySQL credentials')
     if not config['FRONTEND_URL'].startswith('https://'):
         raise RuntimeError('FRONTEND_URL must use HTTPS in production')
-    if config['RATELIMIT_STORAGE_URI'] == 'memory://':
-        raise RuntimeError('Production requires shared rate-limit storage, such as Redis')
+    if config['RATELIMIT_STORAGE_URI'] == 'memory://' and not config.get('RATELIMIT_SINGLE_WORKER'):
+        # In-memory limits live inside one process, so with several workers
+        # each keeps its own counters and the effective limit is multiplied
+        # by the worker count -- which is how a login lockout of eight
+        # attempts quietly becomes twenty-four.
+        #
+        # Redis is the right answer and is not always on offer: a shared
+        # cPanel plan usually has none, and this check refusing to start was
+        # a deployment blocker with no way past it. So it can be
+        # acknowledged instead, and the acknowledgement is specific: it
+        # asserts that this application runs as exactly one process. Set
+        # PassengerMaxPoolSize/`passenger_max_pool_size` to 1 for the app,
+        # or raise a worker count anywhere and the limits silently loosen.
+        raise RuntimeError(
+            'Production requires shared rate-limit storage. Set '
+            'RATELIMIT_STORAGE_URI to a redis:// or memcached:// URL. If '
+            'this host has neither and the app runs as a single worker '
+            '(the usual shared-hosting case), set RATELIMIT_SINGLE_WORKER=true '
+            'to accept per-process limits -- and keep the worker count at 1, '
+            'because every extra worker multiplies every limit.')
     # The API is reached through the frontend's /api proxy, so without this
     # every request carries the proxy's address: rate limits collapse into one
     # shared bucket and the audit log records the wrong source for everything.
@@ -33,6 +51,84 @@ def validate_production(config):
             'FIELD_ENCRYPTION_KEY must be set in production so carrier and '
             'gateway credentials do not depend on SECRET_KEY'
         )
+
+
+#: How long a public, non-personal GET may be cached. Short enough that
+#: activating a campaign or correcting an FAQ shows up within minutes,
+#: long enough that a burst of traffic does not become a burst of Python.
+PUBLIC_CACHE_SECONDS = 180
+
+#: Exact paths and prefixes whose GET responses contain nothing about the
+#: person asking. Adding to this list means asserting that two different
+#: visitors may be served the same bytes.
+#:
+#: Deliberately absent: /api/consent/ (the visitor's own decision),
+#: /api/tracking/<no> (somebody's parcel), anything under /admin, and
+#: every authenticated listing.
+_CACHEABLE_EXACT = frozenset({
+    '/api/consent/policy',
+    '/api/faq/',
+    '/api/faq',
+    '/api/services/',
+    '/api/services',
+    '/api/content/pages',
+    '/api/content/page',
+    '/api/reviews/',
+    '/api/reviews/summary',
+    '/api/reviews/google',
+    '/api/ads/serve',
+    '/api/ads/notices',
+    '/api/branches/',
+    '/api/branches',
+})
+
+_CACHEABLE_PREFIXES = ('/api/geo/',)
+
+#: Cookies that mean a person is signed in. Their presence disqualifies a
+#: response from any cache, because the handler may have answered for them.
+_AUTH_COOKIES = ('access_token', 'refresh_token', 'csrf_access_token',
+                 'csrf_refresh_token')
+
+
+def _is_publicly_cacheable(request, response):
+    """Whether this response may be stored by a shared cache.
+
+    Four conditions, all required. The request has to be a plain GET, the
+    answer has to have been a success, the path has to be named above, and
+    — the one that matters — the request must carry nothing that
+    identifies a caller. An authenticated request to a public path still
+    gets `no-store`, because the handler may have answered differently for
+    that person and a shared cache cannot know that.
+    """
+    if request.method not in ('GET', 'HEAD'):
+        return False
+    if response.status_code != 200:
+        return False
+    if request.authorization or request.headers.get('Authorization'):
+        return False
+    path = request.path
+    if not (path in _CACHEABLE_EXACT or path.startswith(_CACHEABLE_PREFIXES)):
+        return False
+    # A signed-in caller may get a different answer on the same path --
+    # /api/branches/ returns the whole network to an administrator and only
+    # the published ones to everybody else -- so an authenticated request is
+    # never cached, anywhere, at any level.
+    if any(name in request.cookies for name in _AUTH_COOKIES):
+        return False
+    return True
+
+
+def _cache_scope(request):
+    """`public` for an anonymous caller, `private` for an identified one.
+
+    Most returning visitors carry the consent cookie, and treating that as
+    disqualifying meant the cache only ever helped first-time visitors and
+    crawlers. It is still not safe to put their copy in a shared cache --
+    adverts vary by country and the consent cookie is an identifier -- but
+    their own browser may keep it, which removes the repeat calls as they
+    move between pages.
+    """
+    return 'private' if request.cookies else 'public'
 
 
 def install_security(app):
@@ -84,18 +180,30 @@ def install_security(app):
                 'max-age=31536000; includeSubDomains'
             )
         if request.path.startswith('/api'):
-            # `no-store` is right for everything this API normally returns:
-            # shipment records, customer details, admin listings. None of it
-            # should sit in a shared cache or a browser's disk.
+            # `no-store` is the default and stays the default: shipment
+            # records, customer details and admin listings must never sit in
+            # a shared cache or on a visitor's disk.
             #
-            # Advert images are the exception, and the only one. They are
-            # public by nature, served under a random content-addressed name
-            # that is never reused, and fetched on every page view that
-            # shows a banner. Overwriting their caching headers here meant
-            # the route's own `immutable` was discarded on the wire and
-            # every visitor re-downloaded every banner on every page.
+            # But the public site is now static HTML, and every page view
+            # still called Flask five or six times for content that changes
+            # about once a week — the service catalogue, the FAQ, the advert
+            # slots, the cookie policy. On shared hosting that is a Python
+            # process woken for every visitor to serve a constant.
+            #
+            # So: an allowlist, never a blocklist. A path has to be named
+            # here to become cacheable, and a response is only cacheable
+            # when nothing about the request identifies a person.
             if request.path.startswith('/api/ads/images/'):
                 response.headers.pop('Pragma', None)
+            elif _is_publicly_cacheable(request, response):
+                response.headers['Cache-Control'] = (
+                    f'{_cache_scope(request)}, max-age={PUBLIC_CACHE_SECONDS}, '
+                    f'stale-while-revalidate={PUBLIC_CACHE_SECONDS * 4}')
+                response.headers.pop('Pragma', None)
+                # Country steers which adverts are returned, and language
+                # steers the wording, so a shared cache must not serve one
+                # visitor's copy to another in a different place.
+                response.headers['Vary'] = 'Accept-Encoding, CF-IPCountry'
             else:
                 response.headers['Cache-Control'] = 'no-store'
                 response.headers['Pragma'] = 'no-cache'
